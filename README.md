@@ -1,4 +1,24 @@
-# 🌙 Merlin's Daily Handbook
+# 🌙 Merlin's Daily Journal
+
+## Celestial sticker-calendar edition (October 2026)
+
+The current main screen is a compact navy/gold **24-hour timetable, from 4:00 AM to 4:00 AM the next day**. The top of each of the **48 half-hour tiles** switches between sleep and awake. The sleep counter shows **18 hours as a flexible target** and recalculates **projected sleep** from the schedule; actual sleep can be checked separately.
+
+- **Activities:** Long-press then drag one of the preset palette stickers (potty, breakfast, lunch, dinner, walk, training, light play, enrichment, settling, socialization, grooming, cuddles) onto a tile. On desktop, drag with the mouse. Activities begin with preset 10- or 15-minute durations.
+- **Move or resize:** Drag an activity from its center to move it, or drag its small gold left/right grip to change length in 5-minute steps. A floating hint shows the selected length while dragging; release to apply. Touch users should **hold a finger on the grip** before moving it.
+- **No typing needed:** The stickers beneath the plan palette include 💧 (#1), 💩 (#2), 🐾 (both), ➖ (neither), meals, behavior, accidents and more. Drag them onto the 4 AM–4 AM calendar to stamp the time; tap an already recorded sticker to remove it. A tap on a palette sticker followed by a tap on a tile is also supported.
+- **Daily records:** Potty and activity observations are shown **inside the same calendar**, with a single optional additional-notes box at the bottom. Earlier dates appear under **Previous days** and are read-only.
+- **4 AM reset:** At 4:00 AM (device local time) the selected *today* advances automatically. The new day starts from the saved default routine **without copying logs or sleep confirmations**. Prior days remain stored as separate records.
+- **Save as default:** Arrange the schedule as you like, then click **Save current routine as default**. Future dates use it. **Load default** replaces only the day's planned activities; existing notes and stickers are retained. The default is stored locally in device-only mode or privately in Supabase when configured.
+- **Sleep and potty:** The preloaded base routine still contains **three meals** and the overnight **2 AM and 6:30 AM** potty breaks; the 4 AM reset shifts their positions in the day view but keeps their times.
+
+**Security and cross-device sync:** Private accounts still require Supabase to be set up. Re-run `supabase/schema.sql` against an existing Supabase project: it now adds the `profiles.default_schedule` column, protected by the profile's existing RLS policies. Without Supabase, only browser-local storage is used. A second account **does not yet share the same journal automatically**.
+
+**Note about old saved days:** Earlier records used a 7 AM day start. The application rotates them into the new 4 AM display when opened while retaining their existing notes and logs. Dates of activities logged near the old boundary may need review; no previous records are intentionally deleted.
+
+---
+
+
 
 A mobile-friendly, celestial blue-and-gold puppy care planner with a 24-hour visual timeline, editable sleep/activity blocks, potty & meal logs, training notes, history and optional private cloud accounts.
 
