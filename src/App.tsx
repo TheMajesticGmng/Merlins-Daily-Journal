@@ -1,194 +1,227 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { User } from '@supabase/supabase-js';
-import { ArrowLeft, ArrowRight, CalendarDays, Check, CheckCircle2, Download, Edit3, LockKeyhole, LogOut, Moon, Plus, Save, Settings, ShieldCheck, Star, Sun, Trash2, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CalendarDays, Download, LockKeyhole, LogOut, MoonStar, Save, ShieldCheck } from 'lucide-react';
+import StickerPlanner from './StickerPlanner';
 import { supabase, cloudConfigured } from './supabase';
-import { partsInHalfHour, tileSleepMinutes, wakeHalfHour, sleepHalfHour, replaceInterval } from './halfHour';
-import { actualSleepMinutes, blankDay, buildTemplate, categories, categoryEmoji, categoryNames, dateLocal, DayRecord, type Block, type Category, type JournalEvent, type LogKind, type PottyResult, inputToOffset, loggedSleepCount, makeId, prettyDate, shiftDate, sleepMinutes, timeFromMinutes, toClock, toInputTime } from './model';
+import { type Block, type DayRecord, dateLocal, prettyDate, shiftDate, categoryEmoji } from './model';
+import { calendarDate, blankForDay, normalizeDay, rotateLegacyBlocks, projectedMinutes, loggedMinutes, clockAt, offsetForClock } from './scheduleV2';
 
-type Mode = 'local'|'cloud';
-type Page = 'planner'|'journal'|'history'|'settings';
-const PERSIST_PREFIX='merlins-handbook:v1:';
-const localKey=(date:string)=>`${PERSIST_PREFIX}day:${date}`;
-const defaultProfile = {display_name:'',pet_name:'Merlin',pet_weight_lbs:'12.5'};
-type Profile = typeof defaultProfile;
-const typeOfLog: Record<LogKind,string> = {potty:'Potty',meal:'Meal',accident:'Accident',behavior:'Behavior',training:'Training',weight:'Weight',water:'Water',grooming:'Grooming',social:'Socialization',crate:'Crate practice',medication:'Medication',other:'Other'};
-const logKinds=Object.keys(typeOfLog) as LogKind[];
-const getLocalDay=(date:string):DayRecord=>{
-  try { const value=localStorage.getItem(localKey(date)); if(value){const parsed=JSON.parse(value); if(parsed.version===1 && Array.isArray(parsed.blocks)) return parsed as DayRecord; }}catch{/* ignore invalid local copy */}
-  return blankDay();
-};
-const todayClock=()=>new Date().toTimeString().slice(0,5);
-const formatDuration=(m:number)=>m%60===0?`${m/60} hr${m===60?'':'s'}`:`${Math.floor(m/60)?Math.floor(m/60)+'h ':''}${m%60}m`;
-const errorText = (err: unknown) => err instanceof Error ? err.message : String(err);
-function Dots(){return <span aria-hidden="true" className="starfield"><i>✦</i><i>✧</i><i>✦</i><i>✧</i><i>✦</i><i>✧</i><i>✦</i><i>✧</i><i>✦</i><i>✧</i></span>}
+type Mode='local'|'cloud';
+type Page='planner'|'history'|'settings';
+type Profile={display_name:string;pet_name:string;pet_weight_lbs:string};
+const DEFAULT_PROFILE:Profile={display_name:'',pet_name:'Merlin',pet_weight_lbs:'12.5'};
+const PREFIX='merlins-handbook:v1:';
+const dayKey=(date:string)=>PREFIX+'day:'+date;
+const defaultKey=PREFIX+'default-4am';
+const profileKey=PREFIX+'profile';
+function errorText(e:unknown){return e instanceof Error?e.message:String(e)}
+function readLocalDefault():Block[]|undefined{
+ try {const v=localStorage.getItem(defaultKey);if(!v)return;const data=JSON.parse(v);if(Array.isArray(data)&&data.every((x:Block)=>typeof x?.start==='number'&&typeof x?.duration==='number'))return data;}catch{/* Default remains unset */}return;
+}
+function readLocalDay(date:string,template?:Block[]):DayRecord{
+ try {const raw=localStorage.getItem(dayKey(date));if(raw){const data=JSON.parse(raw) as DayRecord;if(data.version===1&&Array.isArray(data.blocks))return normalizeDay(data)}}catch{/* fall back without deleting original data */}
+ return blankForDay(template);
+}
+function getLogEmoji(log:DayRecord['logs'][number]){
+ if(log.kind==='potty')return({pee:'💧',poop:'💩',both:'🐾',neither:'➖'} as Record<string,string>)[log.result||'neither'];
+ return ({meal:'🥣',accident:'⚠️',training:'🏅',water:'💦',medication:'💊',crate:'🏠',behavior:log.mood==='frantic'?'⚡':'🌙',grooming:'🪮',social:'🌟',weight:'⚖️',other:'⭐'} as Record<string,string>)[log.kind]||'⭐';
+}
 function AuthGate({onLocal}:{onLocal:()=>void}){
-  const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[busy,setBusy]=useState(false),[signup,setSignup]=useState(false),[message,setMessage]=useState('');
-  async function submit(e:FormEvent){e.preventDefault(); if(!supabase)return;setBusy(true);setMessage('');try{
-    const res=signup?await supabase.auth.signUp({email,password,options:{emailRedirectTo:location.origin+import.meta.env.BASE_URL}}):await supabase.auth.signInWithPassword({email,password});
-    if(res.error) throw res.error;
-    if(signup && !res.data.session) setMessage('Check your email for a confirmation link, then sign in.');
-  }catch(e){setMessage(errorText(e))}finally{setBusy(false)}}
-  return <section className="auth-card"><div className="auth-icon">🌙</div><h2>{signup?'Create your private account':'Welcome back to the observatory'}</h2><p>Sign in to securely save Merlin's days across devices. Your journal is private to your account.</p><form onSubmit={submit} className="stack gap12"><label>Email address<input type="email" value={email} onChange={e=>setEmail(e.target.value)} required autoComplete="email" placeholder="you@example.com" /></label><label>Password<input type="password" value={password} onChange={e=>setPassword(e.target.value)} required minLength={8} autoComplete={signup?'new-password':'current-password'} placeholder="At least 8 characters" /></label><button type="submit" className="primary" disabled={busy}>{busy?'Please wait…':signup?'Create account':'Sign in'}</button></form>{message&&<p className="notice" role="status">{message}</p>}<button className="text-button" onClick={()=>{setSignup(!signup);setMessage('')}}>{signup?'Already registered? Sign in':'New here? Create an account'}</button><div className="auth-divider">or</div><button className="ghost" onClick={onLocal}>Try private-to-this-device preview</button><small className="muted">Preview records are stored only in this browser, without a login or cloud encryption. Don't use it as your permanent synchronized journal.</small></section>;
+ const [email,setEmail]=useState('');const [password,setPassword]=useState('');
+ const [signup,setSignup]=useState(false);const [busy,setBusy]=useState(false);const [message,setMessage]=useState('');
+ async function submit(e:FormEvent){
+  e.preventDefault();if(!supabase)return;
+  setBusy(true);setMessage('');
+  try {const r=signup?await supabase.auth.signUp({email,password,options:{emailRedirectTo:location.origin+import.meta.env.BASE_URL}}):await supabase.auth.signInWithPassword({email,password});
+   if(r.error)throw r.error;if(signup&&!r.data.session)setMessage('Check your email to confirm your account.');}
+  catch(e){setMessage(errorText(e))}finally{setBusy(false)}
+ }
+ return <div className="auth-card">
+  <div className="auth-icon">☾ ✦</div><h2>{signup?'Open your observatory':'Welcome back to Merlin’s observatory'}</h2>
+  <p>Sign in to save your little wizard’s days privately across devices.</p>
+  <form className="stack gap12" onSubmit={submit}>
+   <label>Email<input type="email" required autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)}/></label>
+   <label>Password<input type="password" minLength={8} required autoComplete={signup?'new-password':'current-password'} value={password} onChange={e=>setPassword(e.target.value)}/></label>
+   <button className="primary" type="submit" disabled={busy}>{busy?'Just a moment…':signup?'Create account':'Sign in'}</button>
+  </form>
+  {message&&<p className="notice" role="status">{message}</p>}
+  <button className="text-button" onClick={()=>{setSignup(x=>!x);setMessage('')}}>{signup?'Already have an account? Sign in':'Create an account'}</button>
+  <p className="auth-divider">or</p><button className="ghost" onClick={onLocal}>Preview on this device</button>
+  <small>This preview uses browser storage, not encrypted cloud sync. It can be lost when the browser is cleared.</small>
+ </div>;
 }
-function Progress({value,max,label}:{value:number,max:number,label:string}){return <div className="progress-wrap" role="progressbar" aria-label={label} aria-valuenow={value} aria-valuemin={0} aria-valuemax={max}><div style={{width:`${Math.min(100,Math.max(0,(value/max)*100))}%`}} /></div>}
-function SleepSummary({record}:{record:DayRecord}){
-  const target=1080, planned=sleepMinutes(record.blocks), actual=actualSleepMinutes(record.blocks);
-  const total=record.blocks.filter(b=>b.category==='sleep').length, logged=loggedSleepCount(record.blocks);
-  return <div className="summary-grid">
-    <article className="summary-card sleep-goal-card">
-      <div className="mini-title"><Moon size={18}/> Merlin's sleep counter</div>
-      <div className="sleep-counter"><div><span className="counter-caption">TARGET</span><strong>18h</strong></div><div className="counter-arrow">✦</div><div className="counter-projected"><span className="counter-caption">PROJECTED FROM TILES</span><strong>{timeFromMinutes(planned)}</strong></div></div>
-      <Progress label="Scheduled sleep toward 18 hours" value={planned} max={target}/>
-      <small>Updates automatically as you toggle half-hour sleep tiles. Planned rest is not actual sleep.</small>
-    </article>
-    <article className="summary-card">
-      <div className="mini-title"><CheckCircle2 size={17}/> Actual sleep logged</div>
-      <strong>{timeFromMinutes(actual)}</strong><Progress label="Actual sleep logged" value={actual} max={target}/>
-      <small>{logged} of {total} sleep blocks recorded · unchecked naps are unknown</small>
-    </article>
-    <article className="summary-card compact">
-      <div className="mini-title"><Sun size={17}/> Projected awake time</div>
-      <strong>{timeFromMinutes(1440-planned)}</strong>
-      <small>Meals, potty trips, play, training and quiet activities</small>
-    </article>
-  </div>;
+function exportJson(data:unknown){
+ const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+ const a=document.createElement('a');a.href=url;a.download='merlin-journal-'+dateLocal()+'.json';a.click();
+ window.setTimeout(()=>URL.revokeObjectURL(url),2000);
 }
-
-function HalfHourPlanner({blocks,onToggle,onPlan,onEdit}:{blocks:Block[],onToggle:(start:number)=>void,onPlan:(start:number)=>void,onEdit:(b:Block)=>void}){
-  const tile=(slot:number)=>{
-    const pieces=partsInHalfHour(blocks,slot), sleeping=tileSleepMinutes(blocks,slot);
-    const state=sleeping===30?'sleep':sleeping===0?'awake':'mixed';
-    return <div className={`half-tile half-${state}`} key={slot}>
-      <button type="button" className="half-toggle" onClick={()=>onToggle(slot)} aria-label={`${toClock(slot)}: ${state}. Toggle sleep or awake`} title="Tap to toggle sleep / awake. Mixed slots retain their potty breaks.">
-        <span className="half-time">{toClock(slot).replace(' AM','a').replace(' PM','p')}</span>
-        <span className="half-state">{sleeping===30?'☾ Sleep':sleeping===0?'✧ Awake':`◐ ${sleeping}m sleep`}</span>
-      </button>
-      <div className="tile-track" role="group" aria-label={`Activities ${toClock(slot)}–${toClock(slot+30)}`}>
-        {pieces.map((part,i)=><button type="button" key={part.block.id+':'+i} className={`tile-segment type-${part.block.category}`} style={{left:`${((part.start-slot)/30)*100}%`,width:`${(part.minutes/30)*100}%`}} title={`${part.block.title}: ${part.minutes} minutes. Tap to edit.`} onClick={()=>onEdit(part.block)} aria-label={`Edit ${part.block.title} (${part.minutes} minutes)`}>
-          <span>{part.minutes>=10?categoryEmoji[part.block.category]:''}</span>
-        </button>)}
-      </div>
-      {sleeping<30 && <button type="button" className="half-plan" onClick={()=>onPlan(slot)} aria-label={`Plan activity in ${toClock(slot)} tile`}>＋ Plan activity</button>}
-    </div>;
-  };
-  return <div className="hour-board">
-    {Array.from({length:24},(_,i)=><div className="hour-row" key={i}>
-      <div className="hour-label"><span>{toClock(i*60).replace(':00','')}</span><small>{i>=15?'NEXT MORNING':i===0?'DAY START':''}</small></div>
-      {tile(i*60)}{tile(i*60+30)}
-    </div>)}
-  </div>;
-}
-function HalfHourActivityEditor({slot,blocks,onCancel,onSave}:{slot:number,blocks:Block[],onCancel:()=>void,onSave:(start:number,duration:number,category:Category,title:string,details:string)=>void}){
-  const existing=partsInHalfHour(blocks,slot);
-  const awake=existing.find(p=>p.block.category!=='sleep');
-  const [offset,setOffset]=useState(awake?Math.ceil((awake.start-slot)/5)*5:0);
-  const [duration,setDuration]=useState(10);
-  const [category,setCategory]=useState<Category>('potty');
-  const [title,setTitle]=useState('Potty break');
-  const [details,setDetails]=useState('');
-  const [error,setError]=useState('');
-  const chosenStart=slot+offset;
-  const save=(e:FormEvent)=>{
-    e.preventDefault();setError('');
-    if(offset+duration>30){setError('Keep activities within their half-hour tile.');return;}
-    const intersections=existing.filter(p=>p.start<chosenStart+duration && p.start+p.minutes>chosenStart);
-    if(intersections.some(p=>p.block.category==='sleep')){setError('This portion is scheduled for sleep. Toggle the tile awake before planning here.');return;}
-    const replaced=intersections.filter(p=>p.block.category!=='other');
-    if(replaced.length && !confirm(`Replace ${[...new Set(replaced.map(p=>p.block.title))].join(', ')} during these ${duration} minutes?`))return;
-    onSave(chosenStart,duration,category,title,details);
-  };
-  return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onCancel()}}>
-    <div className="modal tile-modal" role="dialog" aria-modal="true" aria-labelledby="tile-editor-heading">
-      <header className="modal-header"><h2 id="tile-editor-heading">Plan ${toClock(slot)}–${toClock(slot+30)}</h2><button type="button" className="icon-button" onClick={onCancel} aria-label="Close"><X size={20}/></button></header>
-      <p className="tile-modal-help">Assign a 5–30 minute activity inside this tile. A 10-minute activity fills exactly one-third of the bar. Existing activities are preserved unless you confirm replacing them.</p>
-      <form className="form-grid" onSubmit={save}>
-        <label>Activity<select value={category} onChange={e=>{const c=e.target.value as Category;setCategory(c);setTitle(categoryNames[c]);}}>
-          {categories.filter(c=>c!=='sleep').map(c=><option key={c} value={c}>{categoryEmoji[c]} {categoryNames[c]}</option>)}
-        </select></label>
-        <label>Start within tile<select value={offset} onChange={e=>{const next=Number(e.target.value);setOffset(next);setDuration(current=>Math.min(current,30-next))}}>
-          {Array.from({length:6},(_,i)=>i*5).map(n=><option key={n} value={n}>{toClock(slot+n)}</option>)}
-        </select></label>
-        <label>Duration<select value={duration} onChange={e=>setDuration(Number(e.target.value))}>
-          {Array.from({length:6},(_,i)=>(i+1)*5).filter(n=>n<=30-offset).map(n=><option key={n} value={n}>{n} minutes</option>)}
-        </select></label>
-        <label>Label<input required maxLength={90} value={title} onChange={e=>setTitle(e.target.value)}/></label>
-        <label className="wide">Notes<textarea value={details} maxLength={500} rows={2} onChange={e=>setDetails(e.target.value)} placeholder="Quiet potty, place practice, sniff walk, crate work…"/></label>
-        {error&&<p className="error wide" role="alert">{error}</p>}
-        <div className="form-actions wide"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button type="submit" className="primary">Add to this tile</button></div>
-      </form>
-    </div>
-  </div>;
-}
-function sleepToggleText(b:Block){return b.actualSleep==null?'Mark slept':'Logged ✓'}
-function BlockEditor({initial,onCancel,onSave,onDelete,others}:{initial:Block|null,onCancel:()=>void,onSave:(b:Block)=>void,onDelete:(id:string)=>void,others:Block[]}){
- const [category,setCategory]=useState<Category>(initial?.category??'enrichment');
- const [start,setStart]=useState(toInputTime(initial?.start??720));
- const [duration,setDuration]=useState(initial?.duration??10);
- const [title,setTitle]=useState(initial?.title??'New activity');
- const [details,setDetails]=useState(initial?.details??'');
- const [warning,setWarning]=useState('');
- const save=(e:FormEvent)=>{e.preventDefault();const offset=inputToOffset(start);if(offset+duration>1440){setWarning('The activity must end before 7 AM the next day.');return;}if(others.some(b=>offset<b.start+b.duration&&b.start<offset+duration)){setWarning('This overlaps another block. Shorten or edit the existing block first.');return;}onSave({id:initial?.id??makeId(),category,start:offset,duration,title:title.trim()||categoryNames[category],details:details.trim(),completed:initial?.completed??false,actualSleep:category==='sleep'&&initial?.category==='sleep'?initial.actualSleep:null});};
- return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onCancel()}}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="edit-heading"><header className="modal-header"><h2 id="edit-heading">{initial?'Edit activity':'Add activity'}</h2><button className="icon-button" aria-label="Close" onClick={onCancel}><X size={20}/></button></header><form onSubmit={save} className="form-grid"><label>Category<select value={category} onChange={e=>setCategory(e.target.value as Category)}>{categories.map(c=><option value={c} key={c}>{categoryEmoji[c]} {categoryNames[c]}</option>)}</select></label><label>Start time<input type="time" step="300" required value={start} onChange={e=>setStart(e.target.value)}/></label><label>Duration (minutes)<input type="number" min="5" max="1440" step="5" value={duration} required onChange={e=>setDuration(Number(e.target.value))}/></label><label className="wide">Name<input value={title} onChange={e=>setTitle(e.target.value)} required maxLength={90}/></label><label className="wide">Details (optional)<textarea value={details} onChange={e=>setDetails(e.target.value)} rows={3} maxLength={500} placeholder="Training goal, cues, reminders…" /></label>{warning&&<p className="error wide" role="alert">{warning}</p>}<div className="form-actions wide">{initial&&<button type="button" className="danger-text" onClick={()=>{if(confirm('Delete this activity block?'))onDelete(initial.id)}}><Trash2 size={16}/> Delete</button>}<button type="button" className="ghost" onClick={onCancel}>Cancel</button><button type="submit" className="primary"><Save size={16}/> Save block</button></div></form></div></div>
-}
-function LogEditor({initial,onCancel,onSave}:{initial:JournalEvent|null,onCancel:()=>void,onSave:(log:JournalEvent)=>void}){
- const [kind,setKind]=useState<LogKind>(initial?.kind??'potty'),[time,setTime]=useState(initial?.time??todayClock()),[result,setResult]=useState<PottyResult>(initial?.result??'pee'),[place,setPlace]=useState<'outside'|'inside'>(initial?.place??'outside'),[meal,setMeal]=useState<JournalEvent['meal']>(initial?.meal??'Dinner'),[amount,setAmount]=useState(initial?.amount??''),[note,setNote]=useState(initial?.note??''),[mood,setMood]=useState(initial?.mood??'calm');
- const save=(e:FormEvent)=>{e.preventDefault();onSave({id:initial?.id??makeId(),kind,time,result:kind==='potty'||kind==='accident'?result:undefined,place:kind==='potty'||kind==='accident'?place:undefined,meal:kind==='meal'?meal:undefined,amount:kind==='meal'?amount:undefined,note:note.trim(),mood:kind==='behavior'?mood:undefined});};
- return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onCancel()}}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="log-heading"><header className="modal-header"><h2 id="log-heading">{initial?.id?'Edit log':'Log an event'}</h2><button className="icon-button" aria-label="Close" onClick={onCancel}><X size={20}/></button></header><form className="form-grid" onSubmit={save}><label>Event type<select value={kind} onChange={e=>{const next=e.target.value as LogKind;setKind(next);if(next==='accident')setPlace('inside');if(next==='potty')setPlace('outside')}}>{logKinds.map(k=><option value={k} key={k}>{typeOfLog[k]}</option>)}</select></label><label>Time<input type="time" value={time} onChange={e=>setTime(e.target.value)} required/></label>{(kind==='potty'||kind==='accident')&&<><div className="wide"><span className="label-like">What happened?</span><div className="choice-grid">{([['pee','Pee 💧'],['poop','Poop 💩'],['both','Both 🐾'],['neither','Neither —']] as const).map(([val,label])=><button key={val} type="button" className={`choice ${result===val?'selected':''}`} onClick={()=>setResult(val)}>{label}</button>)}</div></div><label>Location<select value={place} onChange={e=>setPlace(e.target.value as 'outside'|'inside')}><option value="outside">Outside</option><option value="inside">Inside</option></select></label></>}{kind==='meal'&&<><label>Meal<select value={meal} onChange={e=>setMeal(e.target.value as JournalEvent['meal'])}>{['Breakfast','Lunch','Dinner','Snack'].map(m=><option key={m}>{m}</option>)}</select></label><label>Food / portion<input value={amount} maxLength={80} onChange={e=>setAmount(e.target.value)} placeholder="½ cup puppy food"/></label></>}{kind==='behavior'&&<label>Behavior<select value={mood} onChange={e=>setMood(e.target.value)}><option value="calm">Calm</option><option value="playful">Playful</option><option value="frantic">Frantic / overtired?</option><option value="barking">Barking when alone</option><option value="other">Other</option></select></label>}<label className="wide">Notes (optional)<textarea rows={3} maxLength={1000} value={note} onChange={e=>setNote(e.target.value)} placeholder={kind==='potty'?'Potty cue, success, any concerns…':kind==='meal'?'Appetite, food changes, treats…':'Anything useful to remember…'}/></label><div className="form-actions wide"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button type="submit" className="primary"><Save size={16}/> Save log</button></div></form></div></div>
-}
-function Comparison({record,onChoose}:{record:DayRecord,onChoose:(kind:'original'|'restful')=>void}){const original=buildTemplate('original'),restful=buildTemplate('restful');return <section className="panel"><div className="section-heading"><div><h2>Choose your day's starting plan</h2><p>Both templates include three meals, 2 PM / 8 PM potty trips, and two overnight outings.</p></div></div><div className="template-grid">{([{key:'original',name:'Post-it baseline',tag:'Original handwritten routine',blocks:original},{key:'restful',name:'18-hour sleep experiment',tag:'Adds 2 hours of daytime rest',blocks:restful}] as const).map(template=><article key={template.key} className={`template-card ${record.template===template.key?'current':''}`}><div className="template-head"><h3>{template.name}</h3><span className="pill">{timeFromMinutes(sleepMinutes(template.blocks))} rest</span></div><p>{template.tag}</p><div className="template-bar">{template.blocks.map(b=><span key={b.id} className={`type-${b.category}`} style={{flex:b.duration}} title={`${toClock(b.start)} ${b.title}`}/>)}</div><button className={record.template===template.key?'ghost':'secondary'} onClick={()=>onChoose(template.key)}>{record.template===template.key?'Current starting plan':'Use this template'}</button></article>)}</div><p className="fine-print">Changing templates replaces the day's scheduled blocks and their completion status, but preserves notes and event logs. Both templates are flexible opportunities for sleep, not sleep prescriptions.</p></section>}
-function QuickLogs({logs,onAdd,onEdit,onDelete}:{logs:JournalEvent[],onAdd:(k:LogKind)=>void,onEdit:(l:JournalEvent)=>void,onDelete:(id:string)=>void}){const sorted=[...logs].sort((a,b)=>inputToOffset(a.time)-inputToOffset(b.time));return <><div className="quick-buttons"><button onClick={()=>onAdd('potty')}><span>🐾</span> Potty</button><button onClick={()=>onAdd('meal')}><span>🥣</span> Meal</button><button onClick={()=>onAdd('accident')}><span>🧻</span> Accident</button><button onClick={()=>onAdd('behavior')}><span>🌦️</span> Behavior</button><button onClick={()=>onAdd('training')}><span>✨</span> Training</button><button onClick={()=>onAdd('other')}><Plus size={17}/> Other</button></div>{sorted.length===0?<div className="empty-state">No events logged yet. Quick-log potty trips, meals, accidents, training or changes in energy here.</div>:<div className="event-list">{sorted.map(l=><article key={l.id} className="event"><div className="event-clock">{l.time}{inputToOffset(l.time)>1020&&<small>next AM</small>}</div><div className="event-body"><b>{typeOfLog[l.kind]}</b>{l.kind==='potty'||l.kind==='accident'?<span> · {({pee:'Pee',poop:'Poop',both:'Both',neither:'Neither'} as Record<PottyResult,string>)[l.result||'neither']} · {l.place||'outside'}</span>:null}{l.kind==='meal'&&<span> · {l.meal||'Meal'} {l.amount?`· ${l.amount}`:''}</span>}{l.kind==='behavior'&&l.mood&&<span> · {l.mood}</span>}{l.note&&<p>{l.note}</p>}</div><button className="icon-button" onClick={()=>onEdit(l)} title="Edit log" aria-label="Edit log"><Edit3 size={16}/></button><button className="icon-button" onClick={()=>{if(confirm('Delete this log entry?'))onDelete(l.id)}} title="Delete log" aria-label="Delete log"><Trash2 size={16}/></button></article>)}</div>}</>}
-function ExportButton({mode,userId}:{mode:Mode,userId?:string}){const [busy,setBusy]=useState(false),[error,setError]=useState('');const download=async()=>{setBusy(true);setError('');try{let days: unknown[]; if(mode==='local'){days=Object.keys(localStorage).filter(k=>k.startsWith(PERSIST_PREFIX+'day:')).map(k=>({day_date:k.split(':').pop(),record:JSON.parse(localStorage.getItem(k)||'null')}));}else if(supabase && userId){const {data,error}=await supabase.from('day_records').select('day_date,record').eq('user_id',userId).order('day_date');if(error)throw error;days=data||[];}else throw Error('Not signed in');const text=JSON.stringify({format:'merlins-handbook-backup-v1',exported_at:new Date().toISOString(),days},null,2);const url=URL.createObjectURL(new Blob([text],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download=`merlin-journal-backup-${dateLocal()}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),2000);}catch(e){setError(errorText(e))}finally{setBusy(false)}};return <div><button className="secondary" onClick={download} disabled={busy}><Download size={17}/>{busy?'Preparing…':'Export all logged days (JSON)'}</button>{error&&<p className="error">{error}</p>}<p className="fine-print">Your export is an ordinary, unencrypted JSON file. Keep it somewhere private.</p></div>}
 function App(){
- const [mode,setMode]=useState<Mode>(cloudConfigured?'cloud':'local');const [user,setUser]=useState<User|null>(null);const [authReady,setAuthReady]=useState(!cloudConfigured);const [page,setPage]=useState<Page>('planner');const [date,setDate]=useState(dateLocal());const [record,setRecord]=useState<DayRecord>(()=>getLocalDay(dateLocal()));const [loading,setLoading]=useState(false);const [status,setStatus]=useState('');const [error,setError]=useState('');const [editingBlock,setEditingBlock]=useState<Block|null|undefined>(undefined);const [editingLog,setEditingLog]=useState<JournalEvent|null|undefined>(undefined);const [planningTile,setPlanningTile]=useState<number|null>(null);const [profile,setProfile]=useState<Profile>(defaultProfile);const [historical,setHistorical]=useState<{date:string;sleep:number;logs:number;mood:string}[]>([]);const [dailyNote,setDailyNote]=useState('');
- const currentIdentity=useRef('');const lastLoad=useRef(0);const saveQueue=useRef<Promise<unknown>>(Promise.resolve());
- useEffect(()=>{if(!supabase)return; supabase.auth.getSession().then(({data})=>{setUser(data.session?.user??null);setAuthReady(true)}).catch(()=>setAuthReady(true));const sub=supabase.auth.onAuthStateChange((_event,session)=>setUser(session?.user??null));return()=>sub.data.subscription.unsubscribe()},[]);
- useEffect(()=>{currentIdentity.current=(mode==='cloud'?(user?.id||'signed-out'):'local');},[mode,user?.id]);
- const loadDay=useCallback(async(d:string)=>{const token=++lastLoad.current;setLoading(true);setError('');try{if(mode==='local'){const data=getLocalDay(d);if(token===lastLoad.current){setRecord(data);setDailyNote(data.notes)}}else if(user&&supabase){const {data,error}=await supabase.from('day_records').select('record').eq('user_id',user.id).eq('day_date',d).maybeSingle();if(error)throw error;const value=data?.record && Array.isArray(data.record.blocks)?data.record as DayRecord:blankDay();if(token===lastLoad.current){setRecord(value);setDailyNote(value.notes)}}}catch(e){if(token===lastLoad.current)setError('Cannot load day: '+errorText(e))}finally{if(token===lastLoad.current)setLoading(false)}},[mode,user]);
- useEffect(()=>{if(mode==='cloud'&&!user)return;void loadDay(date)},[mode,user,date,loadDay]);
- const loadHistory=useCallback(async()=>{try{const dates=Array.from({length:14},(_,i)=>shiftDate(date,-i));let rows:{day_date:string;record:DayRecord}[]=[];if(mode==='local'){rows=dates.map(d=>{try{const raw=localStorage.getItem(localKey(d));return raw?{day_date:d,record:JSON.parse(raw)}:null}catch{return null}}).filter((r):r is {day_date:string;record:DayRecord}=>!!r)}else if(supabase&&user){const {data,error}=await supabase.from('day_records').select('day_date,record').eq('user_id',user.id).gte('day_date',dates.at(-1)!).lte('day_date',dates[0]);if(error)throw error;rows=data as typeof rows||[];}setHistorical(rows.map(r=>({date:r.day_date,sleep:actualSleepMinutes(r.record.blocks),logs:r.record.logs.length,mood:r.record.mood})).sort((a,b)=>b.date.localeCompare(a.date)));}catch(e){setError('Cannot load history: '+errorText(e))}},[date,mode,user]);
- useEffect(()=>{if(page==='history')void loadHistory()},[page,loadHistory]);
- useEffect(()=>{const run=async()=>{try{if(mode==='local'){const raw=localStorage.getItem(PERSIST_PREFIX+'profile');setProfile(raw?{...defaultProfile,...JSON.parse(raw)}:defaultProfile)}else if(user&&supabase){const {data,error}=await supabase.from('profiles').select('display_name,pet_name,pet_weight_lbs').eq('user_id',user.id).maybeSingle();if(error)throw error;setProfile(data?{display_name:data.display_name||'',pet_name:data.pet_name||'Merlin',pet_weight_lbs:data.pet_weight_lbs==null?'':String(data.pet_weight_lbs)}:defaultProfile)}}catch(e){setError('Could not load profile: '+errorText(e))}};void run()},[mode,user]);
- const persist=useCallback((d:string,value:DayRecord)=>{const identity=currentIdentity.current;const next={...value,updatedAt:new Date().toISOString()};setRecord(next);if(mode==='local'){try{localStorage.setItem(localKey(d),JSON.stringify(next));setStatus('Saved on this device')}catch(e){setError('Local storage failed: '+errorText(e))}}else if(user&&supabase){setStatus('Saving…');saveQueue.current=saveQueue.current.catch(()=>undefined).then(async()=>{const {error}=await supabase!.from('day_records').upsert({user_id:user.id,day_date:d,record:next,updated_at:next.updatedAt},{onConflict:'user_id,day_date'});if(error)throw error;if(currentIdentity.current===identity)setStatus('Saved securely to your account')}).catch(e=>{if(currentIdentity.current===identity)setError('Save failed: '+errorText(e))});}},[mode,user]);
- const saveRecord=(value:DayRecord)=>persist(date,value);
- const updateBlock=(id:string,patch:Partial<Block>)=>saveRecord({...record,blocks:record.blocks.map(b=>b.id===id?{...b,...patch}:b)});
- const addOrEditBlock=(b:Block)=>{const newBlocks=editingBlock?record.blocks.map(old=>old.id===b.id?b:old):[...record.blocks,b];saveRecord({...record,template:'custom',blocks:newBlocks.sort((a,z)=>a.start-z.start)});setEditingBlock(undefined)};
- const removeBlock=(id:string)=>{saveRecord({...record,template:'custom',blocks:record.blocks.filter(b=>b.id!==id)});setEditingBlock(undefined)};
- const saveLog=(log:JournalEvent)=>{saveRecord({...record,logs:[...record.logs.filter(x=>x.id!==log.id),log]});setEditingLog(undefined)};
- const chooseTemplate=(kind:'original'|'restful')=>{if(!confirm(`Use the ${kind==='original'?'Post-it':'18-hour'} template for this date? Existing planned blocks and sleep markings will be replaced, but logs and notes will remain.`))return;saveRecord({...record,template:kind,blocks:buildTemplate(kind)})};
- const saveProfile=async()=>{setStatus('Saving profile…');try{if(mode==='local'){localStorage.setItem(PERSIST_PREFIX+'profile',JSON.stringify(profile))}else if(user&&supabase){const {error}=await supabase.from('profiles').upsert({user_id:user.id,display_name:profile.display_name,pet_name:profile.pet_name,pet_weight_lbs:profile.pet_weight_lbs?Number(profile.pet_weight_lbs):null,updated_at:new Date().toISOString()},{onConflict:'user_id'});if(error)throw error;}setStatus('Profile saved')}catch(e){setError(errorText(e))}};
-  const toggleTile=(slot:number)=>{
-   const asleep=tileSleepMinutes(record.blocks,slot);
-   if(asleep>0){
-     const others=partsInHalfHour(record.blocks,slot).filter(p=>p.block.category!=='sleep');
-     if(others.length && !confirm('This tile also contains a potty or activity break. Only its sleep portion will change to awake; existing activities remain. Continue?'))return;
-     saveRecord({...record,template:'custom',blocks:wakeHalfHour(record.blocks,slot)});
-   } else {
-     const planned=partsInHalfHour(record.blocks,slot).filter(p=>p.block.category!=='other');
-     if(planned.length && !confirm(`Switch ${toClock(slot)}–${toClock(slot+30)} to sleep? This replaces ${[...new Set(planned.map(p=>p.block.title))].join(', ')} within that half-hour.`))return;
-     saveRecord({...record,template:'custom',blocks:sleepHalfHour(record.blocks,slot)});
+ const [mode,setMode]=useState<Mode>(cloudConfigured?'cloud':'local');
+ const [user,setUser]=useState<User|null>(null),[authReady,setAuthReady]=useState(!cloudConfigured);
+ const [date,setDate]=useState(calendarDate),[page,setPage]=useState<Page>('planner');
+ const [defaultBlocks,setDefaultBlocks]=useState<Block[]|undefined>(readLocalDefault);
+ const [record,setRecord]=useState<DayRecord>(()=>readLocalDay(calendarDate(),readLocalDefault()));
+ const [profile,setProfile]=useState<Profile>(DEFAULT_PROFILE);
+ const [notes,setNotes]=useState('');
+ const [loading,setLoading]=useState(false),[status,setStatus]=useState(''),[error,setError]=useState('');
+ const [history,setHistory]=useState<{date:string;rest:number;sleep:number;logs:number}[]>([]);
+ const lastLoad=useRef(0),saveQueue=useRef<Promise<unknown>>(Promise.resolve());
+ const currentIdentity=useRef('');
+ const previousLiveDay=useRef(calendarDate());
+ const defaultRef=useRef(defaultBlocks);defaultRef.current=defaultBlocks;
+ const isHistorical=date<calendarDate();
+
+ useEffect(()=>{if(!supabase)return;let alive=true;
+  void supabase.auth.getSession().then(({data})=>{if(alive){setUser(data.session?.user??null);setAuthReady(true)}}).catch(()=>{if(alive)setAuthReady(true)});
+  const subscription=supabase.auth.onAuthStateChange((_event,session)=>{if(alive)setUser(session?.user??null)});
+  return()=>{alive=false;subscription.data.subscription.unsubscribe()};
+ },[]);
+ useEffect(()=>{currentIdentity.current=mode==='cloud'?(user?.id||'signed-out'):'local'},[mode,user?.id]);
+ useEffect(()=>{
+  const id=window.setInterval(()=>{
+   const next=calendarDate();
+   if(next!==previousLiveDay.current){
+    const old=previousLiveDay.current;previousLiveDay.current=next;
+    setDate(displayed=>displayed===old?next:displayed);
+    setStatus('New day started at 4 AM. Yesterday remains in history.');
    }
+  },30000);
+  return()=>window.clearInterval(id);
+ },[]);
+ useEffect(()=>{let cancelled=false;
+  async function getProfile(){
+   try {
+    if(mode==='local'){
+     const raw=localStorage.getItem(profileKey);
+     if(!cancelled)setProfile(raw?{...DEFAULT_PROFILE,...JSON.parse(raw)}:DEFAULT_PROFILE);
+     if(!cancelled)setDefaultBlocks(readLocalDefault());
+    }else if(user&&supabase){
+     const {data,error}=await supabase.from('profiles').select('display_name,pet_name,pet_weight_lbs,default_schedule').eq('user_id',user.id).maybeSingle();
+     if(error)throw error;
+     if(!cancelled){
+      setProfile(data?{display_name:data.display_name||'',pet_name:data.pet_name||'Merlin',pet_weight_lbs:data.pet_weight_lbs==null?'':String(data.pet_weight_lbs)}:DEFAULT_PROFILE);
+      setDefaultBlocks(Array.isArray(data?.default_schedule)?data.default_schedule as Block[]:undefined);
+     }
+    }
+   }catch(e){if(!cancelled)setError('Profile/default routine: '+errorText(e))}
+  }
+  void getProfile();
+  return()=>{cancelled=true};
+ },[mode,user]);
+
+ const loadDay=useCallback(async(d:string)=>{const token=++lastLoad.current;
+  setLoading(true);setError('');
+  try{
+   let data:DayRecord;
+   if(mode==='local')data=readLocalDay(d,defaultRef.current);
+   else if(user&&supabase){
+    const res=await supabase.from('day_records').select('record').eq('user_id',user.id).eq('day_date',d).maybeSingle();
+    if(res.error)throw res.error;
+    data=res.data?.record&&Array.isArray(res.data.record.blocks)?normalizeDay(res.data.record as DayRecord):blankForDay(defaultRef.current);
+   }else return;
+   if(token===lastLoad.current){setRecord(data);setNotes(data.notes);setStatus('Ready to plan');}
+  }catch(e){if(token===lastLoad.current)setError('Could not load this day: '+errorText(e))}
+  finally{if(token===lastLoad.current)setLoading(false)}
+ },[mode,user]);
+ useEffect(()=>{if(mode==='cloud'&&!user)return;void loadDay(date)},[date,mode,user,defaultBlocks,loadDay]);
+
+ const persist=useCallback((next:DayRecord)=>{
+  const day=date;
+  const value={...next,scheduleAnchor:4,updatedAt:new Date().toISOString()} as DayRecord;
+  const identity=currentIdentity.current;
+  setRecord(value);
+  if(mode==='local'){
+   try {localStorage.setItem(dayKey(day),JSON.stringify(value));setStatus('Saved to this device');}
+   catch(e){setError('Could not save: '+errorText(e))}
+  }else if(user&&supabase){
+   setStatus('Saving…');
+   saveQueue.current=saveQueue.current.catch(()=>undefined).then(async()=>{
+    const {error}=await supabase!.from('day_records').upsert({user_id:user.id,day_date:day,record:value,updated_at:value.updatedAt},{onConflict:'user_id,day_date'});
+    if(error)throw error;if(currentIdentity.current===identity)setStatus('Saved to your private account');
+   }).catch(e=>{if(currentIdentity.current===identity)setError('Save failed: '+errorText(e))});
+  }
+ },[date,mode,user]);
+ const updateBlocks=(blocks:Block[])=>persist({...record,template:'custom',blocks});
+ const updateLogs=(logs:DayRecord['logs'])=>persist({...record,logs});
+ const saveNotes=()=>{if(notes!==record.notes)persist({...record,notes})};
+ async function saveProfile(){
+  try{
+   if(mode==='local')localStorage.setItem(profileKey,JSON.stringify(profile));
+   else if(user&&supabase){const{error}=await supabase.from('profiles').upsert({user_id:user.id,display_name:profile.display_name,pet_name:profile.pet_name,pet_weight_lbs:profile.pet_weight_lbs?Number(profile.pet_weight_lbs):null,updated_at:new Date().toISOString()},{onConflict:'user_id'});if(error)throw error}
+   setStatus('Profile saved');
+  }catch(e){setError('Profile save failed: '+errorText(e))}
+ }
+ async function saveDefault(){
+  const blocks=record.blocks.map(b=>({...b,id:'default-'+b.start+'-'+b.category,completed:false,actualSleep:null}));
+  try{
+   if(mode==='local')localStorage.setItem(defaultKey,JSON.stringify(blocks));
+   else if(user&&supabase){
+    const {error}=await supabase.from('profiles').upsert({user_id:user.id,display_name:profile.display_name,pet_name:profile.pet_name,pet_weight_lbs:profile.pet_weight_lbs?Number(profile.pet_weight_lbs):null,default_schedule:blocks,updated_at:new Date().toISOString()},{onConflict:'user_id'});
+    if(error)throw error;
+   }
+   setDefaultBlocks(blocks);setStatus('New default saved. Future days will start with this routine.');
+  }catch(e){setError('Could not save default: '+errorText(e))}
+ }
+ const resetDefault=()=>{
+  if(!window.confirm('Load the saved default schedule? Current day activities and sleep checkmarks will be replaced, but your potty logs and notes will stay.'))return;
+  persist({...record,template:'custom',blocks:blankForDay(defaultRef.current).blocks});
  };
- const addTileActivity=(start:number,duration:number,category:Category,title:string,details:string)=>{
-   saveRecord({...record,template:'custom',blocks:replaceInterval(record.blocks,start,duration,category,title,details)});
-   setPlanningTile(null);
+ const loadHistory=useCallback(async()=>{
+  try {
+   const recent=Array.from({length:45},(_,i)=>shiftDate(calendarDate(),-i));
+   let rows:{date:string;record:DayRecord}[]=[];
+   if(mode==='local')rows=recent.map(d=>{try{const v=localStorage.getItem(dayKey(d));return v?{date:d,record:normalizeDay(JSON.parse(v) as DayRecord)}:null}catch{return null}}).filter((x):x is {date:string;record:DayRecord}=>!!x);
+   else if(user&&supabase){
+    const{data,error}=await supabase.from('day_records').select('day_date,record').eq('user_id',user.id).gte('day_date',recent.at(-1)!).lte('day_date',recent[0]);
+    if(error)throw error;
+    rows=(data||[]).map(r=>({date:r.day_date as string,record:normalizeDay(r.record as DayRecord)}));
+   }
+   setHistory(rows.map(r=>({date:r.date,rest:projectedMinutes(r.record.blocks),sleep:loggedMinutes(r.record.blocks),logs:r.record.logs.length})).sort((a,b)=>b.date.localeCompare(a.date)));
+  }catch(e){setError('History failed: '+errorText(e))}
+ },[mode,user]);
+ useEffect(()=>{if(page==='history')void loadHistory()},[page,loadHistory]);
+ const doExport=async()=>{
+  try{
+   let days:{day_date:string;record:DayRecord}[]=[];
+   if(mode==='local')days=Object.keys(localStorage).filter(k=>k.startsWith(PREFIX+'day:')).map(k=>({day_date:k.slice(dayKey('').length),record:JSON.parse(localStorage.getItem(k)||'null') as DayRecord}));
+   else if(user&&supabase){const{data,error}=await supabase.from('day_records').select('day_date,record').eq('user_id',user.id).order('day_date');if(error)throw error;days=data as typeof days||[];}
+   exportJson({format:'merlins-daily-journal-v2',exported_at:new Date().toISOString(),days,defaultBlocks:defaultRef.current});
+  }catch(e){setError('Export failed: '+errorText(e))}
  };
- const loggedPotty = record.logs.filter(x=>x.kind==='potty').length;const loggedMeals=record.logs.filter(x=>x.kind==='meal').length;
- const nav=[['planner','Schedule',CalendarDays],['journal','Daily journal',Edit3],['history','History',Moon],['settings','Settings',Settings]] as const;
- if(!authReady)return <div className="boot"><Moon/> Loading the observatory…</div>;
- return <div className="app-shell"><header className="hero"><Dots/><div className="hero-inner"><div className="brand-mark">☾</div><div className="brand-title"><span>THE LITTLE WIZARD'S OBSERVATORY</span><h1>{profile.pet_name||'Merlin'}'s Daily Handbook <span className="title-star">✦</span></h1><p>Rest, adventures, small victories & everything in between.</p></div><div className="hero-right"><img className="pet-portrait" src={`${import.meta.env.BASE_URL}merlin-portrait.webp`} alt="Merlin, an all-black curly poodle puppy resting with celestial pillows" /><span className="hero-caption">One magical day at a time</span></div></div></header>
- <div className="app-body">{mode==='cloud'&&!user?<AuthGate onLocal={()=>setMode('local')}/>:<><div className="topbar"><div className="account-status">{mode==='cloud'?<><ShieldCheck size={16}/> Private cloud account <b>{user?.email}</b></>:<><LockKeyhole size={16}/> Local preview only <span>· stored in this browser</span></>}</div><div className="topbar-actions">{mode==='local'&&cloudConfigured&&<button className="text-button" onClick={()=>setMode('cloud')}>Sign in for secure sync</button>}{mode==='cloud'&&<button className="text-button" onClick={()=>supabase?.auth.signOut()}><LogOut size={15}/> Sign out</button>}</div></div><nav className="nav-tabs" aria-label="Main navigation">{nav.map(([key,label,Icon])=><button key={key} className={page===key?'active':''} onClick={()=>setPage(key)}><Icon size={17}/>{label}</button>)}</nav>
- {page!=='settings'&&<div className="datebar"><button className="round-button" onClick={()=>setDate(d=>shiftDate(d,-1))} title="Previous day"><ArrowLeft size={19}/></button><div><span className="eyebrow">MERLIN'S ADVENTURE LOG</span><h2>{prettyDate(date)}</h2></div><button className="round-button" onClick={()=>setDate(d=>shiftDate(d,1))} title="Next day"><ArrowRight size={19}/></button><label className="picker"><CalendarDays size={17}/><input type="date" value={date} onChange={e=>e.target.value&&setDate(e.target.value)} aria-label="Choose date"/></label><button className="today" onClick={()=>setDate(dateLocal())}>Today</button></div>}
- {error&&<div className="error-alert" role="alert"><span>{error}</span><button onClick={()=>setError('')} aria-label="Dismiss error"><X size={16}/></button></div>}
- {loading?<div className="loading">Turning the pages…</div>:<>
- {page==='planner'&&<><div className="welcome"><div><h2><Star size={20}/> Day at a glance</h2><p>Adjust activities, record real sleep, and follow a schedule that fits your puppy—not the other way around.</p></div><span className="status"><Check size={14}/>{status||'Ready to log'}</span></div><SleepSummary record={record}/><section className="panel"><div className="section-heading"><div><h2>Merlin’s half-hour day ✦</h2><p>7 AM through 7 AM · tap the top of any tile to toggle sleep or awake; use “Plan activity” for 5–30 minute blocks. Colored portions are proportional to time.</p></div><span className="pill moon-pill">☾ 48 half-hour tiles</span></div><HalfHourPlanner blocks={record.blocks} onToggle={toggleTile} onPlan={setPlanningTile} onEdit={b=>setEditingBlock(b)}/><div className="section-heading subtitled"><div><h2>Your daily blocks</h2><p>Check off completed activities. For sleep, log actual minutes slept.</p></div><button className="secondary" onClick={()=>setEditingBlock(null)}><Plus size={17}/> Add activity</button></div><div className="blocks">{record.blocks.map(b=><div className={`block-row type-border-${b.category}`} key={b.id}><span className="block-time">{toClock(b.start)}<small>{formatDuration(b.duration)}</small></span><span className="block-emoji">{categoryEmoji[b.category]}</span><div className="block-description"><b>{b.title}</b>{b.details&&<small>{b.details}</small>}</div>{b.category==='sleep'?<div className="sleep-controls"><button className={`tiny-check ${b.actualSleep!=null?'checked':''}`} onClick={()=>updateBlock(b.id,{actualSleep:b.actualSleep!=null?null:b.duration})}>{sleepToggleText(b)}</button>{b.actualSleep!=null&&<label className="actual-input"><input type="number" min="0" max="720" step="5" value={b.actualSleep} aria-label="Actual sleep minutes" onChange={e=>updateBlock(b.id,{actualSleep:Math.max(0,Math.min(720,Number(e.target.value)))})}/> min</label>}</div>:<button className={`tiny-check ${b.completed?'checked':''}`} onClick={()=>updateBlock(b.id,{completed:!b.completed})}>{b.completed?'Done ✓':'Mark done'}</button>}<button className="icon-button edit-block" onClick={()=>setEditingBlock(b)} title={`Edit ${b.title}`} aria-label={`Edit ${b.title}`}><Edit3 size={16}/></button></div>)}</div><p className="fine-print">Checking a nap logs the planned duration as actual sleep. Adjust the number if Merlin slept less or longer. Unchecked naps are not counted as actual sleep.</p></section><Comparison record={record} onChoose={chooseTemplate}/></>}
- {page==='journal'&&<><section className="panel"><div className="section-heading"><div><h2>Little moments, big milestones</h2><p>Quickly log potty results, meals, accidents, crate practice, grooming and behavior. Times before 7 AM belong to the following morning.</p></div><span className="pill">{loggedPotty} potty · {loggedMeals} meals</span></div><QuickLogs logs={record.logs} onAdd={kind=>setEditingLog({id:'',kind,time:todayClock()} as JournalEvent)} onEdit={l=>setEditingLog(l)} onDelete={id=>saveRecord({...record,logs:record.logs.filter(l=>l.id!==id)})}/></section><section className="panel notes-panel"><div className="section-heading"><div><h2>Today's observations</h2><p>What helped Merlin settle? How much did he actually sleep? Anything worth remembering?</p></div></div><div className="mood-options"><span>How was his energy?</span>{(['calm','mixed','frantic'] as const).map(m=><button key={m} className={record.mood===m?'selected':''} onClick={()=>saveRecord({...record,mood:record.mood===m?'':m})}>{({calm:'🌙 Calm',mixed:'🌤 Mixed',frantic:'⚡ Frantic'} as const)[m]}</button>)}</div><textarea rows={7} value={dailyNote} onChange={e=>setDailyNote(e.target.value)} onBlur={()=>{if(record.notes!==dailyNote)saveRecord({...record,notes:dailyNote})}} placeholder="Example: Merlin settled when we stayed beside his crate. Became frantic after missing his afternoon nap. Calm after sniffing games…" maxLength={20000}/><div className="note-foot"><small>Notes save when you leave this field. Use the Save notes button before changing days.</small><button className="secondary" onClick={()=>saveRecord({...record,notes:dailyNote})}><Save size={16}/> Save notes</button></div></section></>}
- {page==='history'&&<section className="panel"><div className="section-heading"><div><h2>Previous days</h2><p>Last 14 days with saved entries. Actual sleep counts only naps you've marked.</p></div><button className="ghost" onClick={()=>void loadHistory()}>Refresh</button></div>{historical.length===0?<div className="empty-state">Saved days will appear here as you use the schedule and journal.</div>:<div className="history-list">{historical.map(h=><button key={h.date} onClick={()=>{setDate(h.date);setPage('journal')}}><div><b>{prettyDate(h.date)}</b><small>{h.logs} logged event{h.logs===1?'':'s'} · {h.mood||'no mood marked'}</small></div><div className="history-right"><span>{timeFromMinutes(h.sleep)} logged sleep</span><ArrowRight size={17}/></div></button>)}</div>}<div className="history-help">Compare sleep and behavior over several days to see whether Merlin becomes calmer after more consistent naps.</div></section>}
- {page==='settings'&&<><section className="panel"><div className="section-heading"><div><h2>Profile & pet details</h2><p>Personalize your handbook.</p></div></div><form className="form-grid" onSubmit={e=>{e.preventDefault();void saveProfile()}}><label>Your display name<input maxLength={80} value={profile.display_name} onChange={e=>setProfile({...profile,display_name:e.target.value})} placeholder="Optional"/></label><label>Puppy's name<input maxLength={80} required value={profile.pet_name} onChange={e=>setProfile({...profile,pet_name:e.target.value})}/></label><label>Weight (lbs)<input min="0.1" max="400" step="0.1" type="number" value={profile.pet_weight_lbs} onChange={e=>setProfile({...profile,pet_weight_lbs:e.target.value})}/></label><div className="form-actions wide"><button className="primary" type="submit"><Save size={16}/> Save profile</button></div></form></section><section className="panel"><h2>Data & security</h2><div className="security-info"><ShieldCheck size={21}/><div>{mode==='cloud'?<><b>Cloud sync is enabled.</b><p>Supabase Auth handles login. Database row-level security restricts each record to its owner. HTTPS protects traffic in transit, and the provider encrypts stored data at rest. Not end-to-end encrypted.</p></>:<><b>Local preview mode.</b><p>Records stay in this browser's localStorage without a login or dedicated encryption. Clearing browser data will delete the preview. Set up Supabase to get private account-backed sync.</p></>}</div></div><ExportButton mode={mode} userId={user?.id}/></section><section className="panel"><h2>About this routine</h2><p>This app is a logging and planning tool, not a veterinary diagnosis or a requirement to make Merlin sleep exactly 18 hours. Adapt activities to his real needs. Potty breaks after sleep, meals and play may be necessary even if they differ from the chart.</p><p className="fine-print">Account access is currently individual. A separate login won't automatically share a household journal. Secure household sharing can be added in a future version.</p></section></>}
- </> }</> }</div>
- {planningTile!==null&&<HalfHourActivityEditor key={planningTile} slot={planningTile} blocks={record.blocks} onCancel={()=>setPlanningTile(null)} onSave={addTileActivity}/>}
- {(editingBlock!==undefined)&&<BlockEditor key={editingBlock?.id??'new-block'} initial={editingBlock} others={record.blocks.filter(b=>b.id!==editingBlock?.id)} onCancel={()=>setEditingBlock(undefined)} onSave={addOrEditBlock} onDelete={removeBlock}/>}
- {(editingLog!==undefined)&&<LogEditor key={editingLog?.id||'new-log'} initial={editingLog} onCancel={()=>setEditingLog(undefined)} onSave={saveLog}/>}
- <footer className="footer">✦ From one small wizard's day to the next ✦ <span>Made for Merlin, with patience and a little stardust.</span></footer></div>
+ if(!authReady)return <div className="boot">☾ Opening Merlin's observatory…</div>;
+ return <div className="app-shell merlin-v2">
+  <header className="hero"><div className="hero-inner"><div className="brand-mark">☾</div><div className="brand-title"><span>THE LITTLE WIZARD'S OBSERVATORY</span><h1>{profile.pet_name||'Merlin'}'s Daily Journal ✦</h1><p>Dreams, adventures, and all the little discoveries.</p></div><div className="hero-right"><img className="pet-portrait" src={import.meta.env.BASE_URL+'merlin-portrait.webp'} alt="Black poodle puppy Merlin"/><span className="hero-caption">One magical day at a time</span></div></div></header>
+  <main className="app-body">
+   {mode==='cloud'&&!user?<AuthGate onLocal={()=>setMode('local')}/>:<>
+    <div className="topbar"><span className="account-status">{mode==='cloud'?<><ShieldCheck size={16}/> Private cloud journal · {user?.email}</>:<><LockKeyhole size={16}/> Device-only preview · no cloud sync</>}</span>
+     <div className="topbar-actions">{mode==='local'&&cloudConfigured&&<button className="text-button" onClick={()=>setMode('cloud')}>Sign in</button>}{mode==='cloud'&&<button className="text-button" onClick={()=>supabase?.auth.signOut()}><LogOut size={14}/> Sign out</button>}</div>
+    </div>
+    <nav className="nav-tabs" aria-label="Journal sections"><button className={page==='planner'?'active':''} onClick={()=>setPage('planner')}><MoonStar size={17}/>Calendar</button><button className={page==='history'?'active':''} onClick={()=>setPage('history')}><CalendarDays size={17}/>Previous days</button><button className={page==='settings'?'active':''} onClick={()=>setPage('settings')}><Save size={17}/>Settings</button></nav>
+    {page==='planner'&&<div className="datebar"><button className="round-button" aria-label="Previous day" onClick={()=>setDate(d=>shiftDate(d,-1))}><ArrowLeft size={18}/></button><div><span className="eyebrow">MERLIN'S ADVENTURE LOG</span><h2>{prettyDate(date)}</h2></div><button className="round-button" aria-label="Next day" onClick={()=>setDate(d=>shiftDate(d,1))}><ArrowRight size={18}/></button><label className="picker"><CalendarDays size={16}/><input type="date" value={date} aria-label="Choose day" onChange={e=>e.target.value&&setDate(e.target.value)}/></label><button className="today" onClick={()=>setDate(calendarDate())}>Today</button></div>}
+    {error&&<div className="error-alert" role="alert"><span>{error}</span><button onClick={()=>setError('')}>Dismiss</button></div>}
+    {loading?<div className="loading">Opening the pages of this day…</div>:<>
+     {page==='planner'&&<>
+      <StickerPlanner key={date+':'+mode} blocks={record.blocks} logs={record.logs} readOnly={isHistorical} onBlocksChange={updateBlocks} onLogsChange={updateLogs} onSaveDefault={()=>void saveDefault()} onResetFromDefault={resetDefault}/>
+      <section className="panel journal-bottom">
+       <div className="section-heading"><div><h2>✦ The day's little moments</h2><p>{record.logs.length} sticker{record.logs.length===1?'':'s'} recorded · tap a sticker on the calendar to remove it</p></div><span className="pill">{status||'Ready to log'}</span></div>
+       <div className="journal-sticker-summary">{record.logs.length?record.logs.slice().sort((a,b)=>offsetForClock(a.time)-offsetForClock(b.time)).map(l=><span className="journal-sticker" key={l.id} title={l.kind+' '+l.time}>{getLogEmoji(l)} <small>{l.time}</small></span>):<span className="journal-empty">Your observations will appear here as stickers are dropped onto the calendar.</span>}</div>
+       <label className="daily-notes-label" htmlFor="merlin-day-notes">Additional notes <small>(the one optional writing area)</small></label>
+       <textarea id="merlin-day-notes" disabled={isHistorical} className="daily-notes" rows={4} value={notes} onChange={e=>setNotes(e.target.value)} onBlur={saveNotes} placeholder="What helped Merlin settle today? Anything unusual, funny or important?"/>
+       {!isHistorical&&<div className="note-foot"><small>Notes save when you leave the field.</small><button className="secondary" onClick={saveNotes}><Save size={15}/> Save notes</button></div>}
+       {isHistorical&&<p className="fine-print">This finished day is view-only. Future days always load from your chosen default, not yesterday's log.</p>}
+      </section>
+     </>}
+     {page==='history'&&<section className="panel"><div className="section-heading"><div><h2>✦ Pages from Merlin's adventures</h2><p>Each saved calendar is kept as a viewable record. The current day begins anew at 4 AM.</p></div><button className="ghost" onClick={()=>void loadHistory()}>Refresh</button></div>
+      {history.length===0?<p className="empty-state">Once you place stickers or change the schedule, saved days will appear here.</p>:<div className="history-list">{history.map(h=><button key={h.date} onClick={()=>{setDate(h.date);setPage('planner')}}><div><b>{prettyDate(h.date)}</b><small>{h.logs} stickers · {Math.floor(h.rest/60)}h {h.rest%60}m planned</small></div><div className="history-right">{Math.floor(h.sleep/60)}h {h.sleep%60}m logged<ArrowRight size={16}/></div></button>)}</div>}
+     </section>}
+     {page==='settings'&&<><section className="panel"><div className="section-heading"><div><h2>✦ Merlin's profile</h2><p>Account and pet details. Your calendar and sticker logs need no text boxes.</p></div></div><form className="form-grid" onSubmit={e=>{e.preventDefault();void saveProfile()}}><label>Display name<input value={profile.display_name} maxLength={80} onChange={e=>setProfile({...profile,display_name:e.target.value})}/></label><label>Pet name<input required maxLength={80} value={profile.pet_name} onChange={e=>setProfile({...profile,pet_name:e.target.value})}/></label><label>Weight (lb)<input type="number" min=".1" max="400" step=".1" value={profile.pet_weight_lbs} onChange={e=>setProfile({...profile,pet_weight_lbs:e.target.value})}/></label><div className="form-actions wide"><button className="primary" type="submit"><Save size={15}/> Save profile</button></div></form></section>
+      <section className="panel"><h2>✦ Your journal's privacy</h2><div className="security-info"><ShieldCheck size={20}/><div><b>{mode==='cloud'?'Supabase account enabled':'Device-only preview'}</b><p>{mode==='cloud'?'Each account has private data with row-level access rules. Your notes are not end-to-end encrypted.':'Your preview stays in local browser storage until you connect Supabase. It will not automatically sync to another phone.'}</p></div></div><button className="secondary" onClick={()=>void doExport()}><Download size={16}/> Export all days and default (JSON)</button><p className="fine-print">Exports are unencrypted. Keep backups private. Sharing the same journal across separate accounts requires a future shared-household feature.</p></section>
+     </>}
+    </>}
+   </>}
+  </main>
+  <footer className="footer">✦ From one small wizard's day to the next ✦ <span>Merlin's celestial journal · 4 AM daily reset</span></footer>
+ </div>;
 }
 export default App;
