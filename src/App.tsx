@@ -106,7 +106,7 @@ function HalfHourActivityEditor({slot,blocks,onCancel,onSave}:{slot:number,block
         <label>Activity<select value={category} onChange={e=>{const c=e.target.value as Category;setCategory(c);setTitle(categoryNames[c]);}}>
           {categories.filter(c=>c!=='sleep').map(c=><option key={c} value={c}>{categoryEmoji[c]} {categoryNames[c]}</option>)}
         </select></label>
-        <label>Start within tile<select value={offset} onChange={e=>setOffset(Number(e.target.value))}>
+        <label>Start within tile<select value={offset} onChange={e=>{const next=Number(e.target.value);setOffset(next);setDuration(current=>Math.min(current,30-next))}}>
           {Array.from({length:6},(_,i)=>i*5).map(n=><option key={n} value={n}>{toClock(slot+n)}</option>)}
         </select></label>
         <label>Duration<select value={duration} onChange={e=>setDuration(Number(e.target.value))}>
