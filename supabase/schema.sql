@@ -20,6 +20,9 @@ create table if not exists public.day_records (
   constraint record_size check (pg_column_size(record) < 200000)
 );
 
+-- Existing projects can run this schema again to add the per-account default routine.
+-- This is public browser configuration only; actual row access remains controlled by RLS.
+alter table public.profiles add column if not exists default_schedule jsonb;
 alter table public.profiles enable row level security;
 alter table public.day_records enable row level security;
 
