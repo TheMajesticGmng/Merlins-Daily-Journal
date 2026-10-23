@@ -4,8 +4,8 @@ import type { User } from '@supabase/supabase-js';
 import { ArrowLeft, ArrowRight, CalendarDays, Download, LockKeyhole, LogOut, MoonStar, Save, ShieldCheck } from 'lucide-react';
 import StickerPlanner from './StickerPlanner';
 import { supabase, cloudConfigured } from './supabase';
-import { type Block, type DayRecord, dateLocal, prettyDate, shiftDate, categoryEmoji } from './model';
-import { calendarDate, blankForDay, normalizeDay, rotateLegacyBlocks, projectedMinutes, loggedMinutes, clockAt, offsetForClock } from './scheduleV2';
+import { type Block, type DayRecord, dateLocal, prettyDate, shiftDate } from './model';
+import { calendarDate, blankForDay, normalizeDay, projectedMinutes, loggedMinutes, offsetForClock } from './scheduleV2';
 
 type Mode='local'|'cloud';
 type Page='planner'|'history'|'settings';
