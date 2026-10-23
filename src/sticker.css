@@ -151,3 +151,10 @@
  .palette-scroll-controls .palette-item{width:82px;min-width:82px;padding:3px}
  .palette-scroll-controls .palette-log{width:72px;min-width:72px}
 }
+
+/* When a held sticker brings a later hour into view, show its current drop target. */
+.sticker-tile.tile-drag-target{
+ outline:2px solid #f5d591;outline-offset:1px;
+ box-shadow:0 0 16px #e4c07755,inset 0 0 16px #e4c07733;
+}
+.sticker-tile.tile-drag-target .sticker-track{border-color:#ffe5a5}
