@@ -1,4 +1,4 @@
-import { type Block, type Category, makeId } from './model';
+import { type Block, type Category, makeId } from './model.ts';
 
 export const HALF_HOUR = 30;
 export type TilePart = { block: Block; start: number; minutes: number };
