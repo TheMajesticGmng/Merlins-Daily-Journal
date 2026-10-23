@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import { Check, RotateCcw, Save, Undo2 } from 'lucide-react';
+import { RotateCcw, Save, Undo2 } from 'lucide-react';
 import { type Block, type Category, type JournalEvent, makeId, categoryEmoji } from './model';
-import { clockAt, clockCompact, clamp, snap5, SLOT, pieces, switchSlot, replaceSegment, markSlotSleep, projectedMinutes, loggedMinutes, offsetForClock } from './scheduleV2';
+import { clockAt, clockCompact, clamp, snap5, pieces, switchSlot, replaceSegment, markSlotSleep, projectedMinutes, loggedMinutes, offsetForClock } from './scheduleV2';
 
 type ActivityTool={id:string;type:'activity';category:Category;duration:number;label:string;emoji:string};
 type LogTool={id:string;type:'log';kind:JournalEvent['kind'];result?:JournalEvent['result'];mood?:string;label:string;emoji:string};
@@ -36,7 +36,6 @@ const LOG_TOOLS:LogTool[]=[
  {id:'water',type:'log',kind:'water',label:'Water',emoji:'💦'},
  {id:'med',type:'log',kind:'medication',label:'Medicine',emoji:'💊'}
 ];
-const tools:Tool[]=[...ACTIVITY_TOOLS,...LOG_TOOLS];
 const LABEL_FOR_KIND:Record<string,string>={potty:'🐾',meal:'🥣',accident:'⚠️',behavior:'🌙',training:'🏅',crate:'🏠',water:'💦',medication:'💊',weight:'⚖️',grooming:'🪮',social:'🌟',other:'⭐'};
 function logSticker(log:JournalEvent):string {
  if(log.kind==='potty')return ({pee:'💧',poop:'💩',both:'🐾',neither:'➖'} as Record<string,string>)[log.result||'neither'];
