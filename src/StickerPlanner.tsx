@@ -59,6 +59,19 @@ export default function StickerPlanner({blocks,logs,readOnly=false,onBlocksChang
  const [visual,setVisual]=useState<DragVisual>(null);
  const [undo,setUndo]=useState<{blocks:Block[];logs:JournalEvent[]}|null>(null);
  const session=useRef<DragSession|null>(null);
+ const activityPalette=useRef<HTMLDivElement>(null);
+ const logPalette=useRef<HTMLDivElement>(null);
+ const suppressClickUntil=useRef(0);
+ const scrollPalette=(which:'activities'|'logs',direction:-1|1)=>{
+  const container=(which==='activities'?activityPalette:logPalette).current;
+  if(!container)return;
+  const distance=Math.max(180,Math.round(container.clientWidth*.7));
+  container.scrollBy({left:direction*distance,behavior:'smooth'});
+ };
+ const selectTool=(tool:Tool)=>{
+  if(Date.now()<suppressClickUntil.current)return;
+  setSelected(p=>p?.id===tool.id?null:tool);
+ };
  const blocksRef=useRef(blocks),logsRef=useRef(logs);
  blocksRef.current=blocks;logsRef.current=logs;
  const planned=projectedMinutes(blocks),logged=loggedMinutes(blocks);
@@ -121,6 +134,7 @@ export default function StickerPlanner({blocks,logs,readOnly=false,onBlocksChang
   if(!d||e.pointerId!==d.pointerId)return;
   if(d.timer)clearTimeout(d.timer);
   const hit=tileHit(e.clientX,e.clientY);
+  if(d.active)suppressClickUntil.current=Date.now()+450;
   if(d.active&&hit&&!readOnly){
    if(d.mode==='palette'&&d.tool)placeTool(d.tool,hit.slot,hit.point);
    if(d.mode==='move'&&d.block)moveBlock(d.block,hit.point);
@@ -130,8 +144,6 @@ export default function StickerPlanner({blocks,logs,readOnly=false,onBlocksChang
     const end=d.mode==='right'?clamp(snap5(hit.point),old.start+5,1440):old.start+old.duration;
     resizeBlock(old,newStart,end-newStart);
    }
-  }else if(!d.active&&d.mode==='palette'&&d.tool){
-   setSelected(p=>p?.id===d.tool?.id?null:d.tool!);
   }
   session.current=null;setVisual(null);
  };
@@ -192,10 +204,26 @@ export default function StickerPlanner({blocks,logs,readOnly=false,onBlocksChang
    <div><span>ACTUALLY LOGGED</span><strong>{displayDuration(logged)}</strong></div>
   </div>
   {!readOnly&&<div className="sticker-palettes">
-   <div className="palette-heading"><b>Plan activities</b><small>Drag onto any half-hour tile · hold to drag on mobile</small></div>
-   <div className="palette-scroll">{ACTIVITY_TOOLS.map(tool=><button type="button" key={tool.id} className={`palette-item palette-activity ${selected?.id===tool.id?'armed':''}`} onPointerDown={e=>begin(e,'palette',tool)} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setSelected(tool)}}} title={`${tool.label}: ${tool.duration} minutes`}><span>{tool.emoji}</span><b>{tool.label}</b><small>{tool.duration}m</small></button>)}</div>
-   <div className="palette-heading palette-log-heading"><b>Log Merlin's day</b><small>Drop a sticker onto the time it happened</small></div>
-   <div className="palette-scroll">{LOG_TOOLS.map(tool=><button type="button" key={tool.id} className={`palette-item palette-log ${selected?.id===tool.id?'armed':''}`} onPointerDown={e=>begin(e,'palette',tool)} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setSelected(tool)}}}><span>{tool.emoji}</span><b>{tool.label}</b></button>)}</div>
+   <div className="palette-heading"><b>Plan activities</b><small>Swipe left/right to browse · tap to select · hold ⠿ to drag</small></div>
+   <div className="palette-scroll-controls">
+    <button type="button" className="palette-nav" aria-label="Scroll activities left" onClick={()=>scrollPalette('activities',-1)}>‹</button>
+    <div className="palette-scroll" ref={activityPalette} aria-label="Swipe sideways to see more activity stickers">{ACTIVITY_TOOLS.map(tool=>
+     <div key={tool.id} className={`palette-item palette-activity ${selected?.id===tool.id?'armed':''}`}>
+      <button type="button" className="palette-select" onClick={()=>selectTool(tool)} onPointerDown={e=>{if(e.pointerType==='mouse')begin(e,'palette',tool)}} title={`${tool.label}: ${tool.duration} minutes; tap to select`} aria-label={`Select ${tool.label}, ${tool.duration} minutes`}><span>{tool.emoji}</span><b>{tool.label}</b><small>{tool.duration}m</small></button>
+      <button type="button" className="palette-grab" onPointerDown={e=>begin(e,'palette',tool)} onClick={e=>e.stopPropagation()} title={`Hold to drag ${tool.label} onto a calendar time`} aria-label={`Hold and drag ${tool.label}`}>⠿ <span>drag</span></button>
+     </div>)}</div>
+    <button type="button" className="palette-nav" aria-label="Scroll activities right" onClick={()=>scrollPalette('activities',1)}>›</button>
+   </div>
+   <div className="palette-heading palette-log-heading"><b>Log Merlin's day</b><small>Swipe for more stickers · tap one, then tap a time; or hold its handle to drag</small></div>
+   <div className="palette-scroll-controls">
+    <button type="button" className="palette-nav" aria-label="Scroll daily log stickers left" onClick={()=>scrollPalette('logs',-1)}>‹</button>
+    <div className="palette-scroll" ref={logPalette} aria-label="Swipe sideways to see more logging stickers">{LOG_TOOLS.map(tool=>
+     <div key={tool.id} className={`palette-item palette-log ${selected?.id===tool.id?'armed':''}`}>
+      <button type="button" className="palette-select" onClick={()=>selectTool(tool)} onPointerDown={e=>{if(e.pointerType==='mouse')begin(e,'palette',tool)}} title={`Tap to select ${tool.label}`} aria-label={`Select ${tool.label} sticker`}><span>{tool.emoji}</span><b>{tool.label}</b></button>
+      <button type="button" className="palette-grab" onPointerDown={e=>begin(e,'palette',tool)} onClick={e=>e.stopPropagation()} title={`Hold to drag ${tool.label} log onto the calendar`} aria-label={`Hold and drag ${tool.label} log`}>⠿ <span>drag</span></button>
+     </div>)}</div>
+    <button type="button" className="palette-nav" aria-label="Scroll daily log stickers right" onClick={()=>scrollPalette('logs',1)}>›</button>
+   </div>
    {selected&&<div className="sticker-selection" role="status">Selected {selected.emoji} {selected.label}. Now tap a calendar tile to place it. <button type="button" onClick={()=>setSelected(null)}>Cancel</button></div>}
   </div>}
   <div className="sticker-calendar-heading"><b>4 AM → 4 AM</b><small>Tap ☾ / ✧ to toggle a half-hour · drag an activity's end grips to resize · tap ✔ to log sleep</small></div>
