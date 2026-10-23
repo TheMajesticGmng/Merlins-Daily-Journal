@@ -114,3 +114,7 @@
 .daily-notes::placeholder{color:#8699bb}
 .daily-notes:disabled{opacity:.78}
 @media(max-width:560px){.merlin-v2 .nav-tabs button{min-width:0}.journal-bottom{padding:15px 12px}.daily-notes-label small{display:block;margin-left:0}}
+
+/* Long-press touch dragging must not be hijacked by page scrolling while held. */
+.palette-item,.sticker-piece-body{touch-action:none}
+@media (hover:none) and (pointer:coarse){.sticker-grip{width:14px;z-index:4}.sticker-piece-body{min-height:18px}}
