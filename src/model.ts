@@ -8,7 +8,7 @@ export type Block = { id: string; start: number; duration: number; category: Cat
 export type PottyResult = 'pee' | 'poop' | 'both' | 'neither';
 export type LogKind = 'potty' | 'meal' | 'accident' | 'behavior' | 'training' | 'weight' | 'water' | 'grooming' | 'social' | 'crate' | 'medication' | 'other';
 export type JournalEvent = { id: string; kind: LogKind; time: string; result?: PottyResult; place?: 'outside' | 'inside'; meal?: 'Breakfast' | 'Lunch' | 'Dinner' | 'Snack'; amount?: string; note?: string; mood?: string };
-export type DayRecord = { version: 1; template: 'original' | 'restful' | 'custom'; blocks: Block[]; logs: JournalEvent[]; notes: string; mood: 'calm' | 'mixed' | 'frantic' | ''; updatedAt: string };
+export type DayRecord = { version: 1; template: 'original' | 'restful' | 'custom'; blocks: Block[]; logs: JournalEvent[]; notes: string; mood: 'calm' | 'mixed' | 'frantic' | ''; updatedAt: string; scheduleAnchor?: 4 };
 export const categories = Object.keys(categoryNames) as Category[];
 export const makeId = (): string => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : String(Date.now()) + Math.random());
 export const toClock = (offset: number): string => { const t = ((DAY_START + offset) % DAY_MINUTES + DAY_MINUTES) % DAY_MINUTES; const hours = t / 60 | 0; const suffix = hours >= 12 ? 'PM' : 'AM'; return `${hours % 12 || 12}:${String(t % 60).padStart(2,'0')} ${suffix}`; };
