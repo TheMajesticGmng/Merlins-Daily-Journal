@@ -3,12 +3,14 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import { RotateCcw, Save, Undo2 } from 'lucide-react';
 import { type Block, type Category, type JournalEvent, makeId, categoryEmoji } from './model';
 import { clockAt, clockCompact, clamp, snap5, pieces, switchSlot, replaceSegment, markSlotSleep, projectedMinutes, loggedMinutes, offsetForClock } from './scheduleV2';
+import { edgeScrollSpeed } from './dragScroll';
 
 type ActivityTool={id:string;type:'activity';category:Category;duration:number;label:string;emoji:string};
 type LogTool={id:string;type:'log';kind:JournalEvent['kind'];result?:JournalEvent['result'];mood?:string;label:string;emoji:string};
 type Tool=ActivityTool|LogTool;
 
 const ACTIVITY_TOOLS:ActivityTool[]=[
+ {id:'sleep',type:'activity',category:'sleep',duration:20,label:'Sleep',emoji:'🌙'},
  {id:'potty',type:'activity',category:'potty',duration:10,label:'Potty',emoji:'🐾'},
  {id:'breakfast',type:'activity',category:'meal',duration:15,label:'Breakfast',emoji:'🥣'},
  {id:'lunch',type:'activity',category:'meal',duration:15,label:'Lunch',emoji:'🥪'},
@@ -43,7 +45,7 @@ function logSticker(log:JournalEvent):string {
  return LABEL_FOR_KIND[log.kind]||'⭐';
 }
 type DragMode='palette'|'move'|'left'|'right';
-type DragSession={mode:DragMode;pointerId:number;tool?:Tool;block?:Block;x:number;y:number;fromX:number;fromY:number;holding:boolean;active:boolean;timer?:ReturnType<typeof setTimeout>;previewStart?:number;previewLength?:number};
+type DragSession={mode:DragMode;pointerId:number;tool?:Tool;block?:Block;x:number;y:number;fromX:number;fromY:number;holding:boolean;active:boolean;timer?:ReturnType<typeof setTimeout>;lastHit?:{slot:number;point:number}};
 type DragVisual={x:number;y:number;label:string;duration?:number;slot?:number}|null;
 const HOUR_COUNT=24;
 const minutesLabel=(n:number)=>n>=60?`${Math.floor(n/60)}h ${String(n%60).padStart(2,'0')}m`:`${n} min`;
@@ -59,6 +61,7 @@ export default function StickerPlanner({blocks,logs,readOnly=false,onBlocksChang
  const [visual,setVisual]=useState<DragVisual>(null);
  const [undo,setUndo]=useState<{blocks:Block[];logs:JournalEvent[]}|null>(null);
  const session=useRef<DragSession|null>(null);
+ const scrollFrame=useRef<number|null>(null);
  const activityPalette=useRef<HTMLDivElement>(null);
  const logPalette=useRef<HTMLDivElement>(null);
  const suppressClickUntil=useRef(0);
@@ -133,8 +136,9 @@ export default function StickerPlanner({blocks,logs,readOnly=false,onBlocksChang
   const d=session.current;
   if(!d||e.pointerId!==d.pointerId)return;
   if(d.timer)clearTimeout(d.timer);
-  const hit=tileHit(e.clientX,e.clientY);
+  const hit=tileHit(e.clientX,e.clientY)??d.lastHit;
   if(d.active)suppressClickUntil.current=Date.now()+450;
+  if(scrollFrame.current!==null){cancelAnimationFrame(scrollFrame.current);scrollFrame.current=null;}
   if(d.active&&hit&&!readOnly){
    if(d.mode==='palette'&&d.tool)placeTool(d.tool,hit.slot,hit.point);
    if(d.mode==='move'&&d.block)moveBlock(d.block,hit.point);
@@ -147,40 +151,71 @@ export default function StickerPlanner({blocks,logs,readOnly=false,onBlocksChang
   }
   session.current=null;setVisual(null);
  };
+
+ // Scroll the document continuously while a held sticker is near the screen's edge.
+ // Unlike touch swiping the sticker palettes, dragging is initiated on the grip.
+ const autoScrollStep=()=>{
+  scrollFrame.current=null;
+  const d=session.current;
+  if(!d?.active)return;
+  const viewport=window.visualViewport;
+  const speed=edgeScrollSpeed(d.y,viewport?.height??window.innerHeight,viewport?.offsetTop??0);
+  if(speed===0)return;
+  const before=window.scrollY;
+  window.scrollBy(0,speed);
+  if(window.scrollY===before)return; // Reached the first or last available hour.
+  const hit=tileHit(d.x,d.y);
+  if(hit){
+   d.lastHit=hit;
+   setVisual(prev=>prev&&prev.slot!==hit.slot?{...prev,slot:hit.slot}:prev);
+  }
+  scrollFrame.current=requestAnimationFrame(autoScrollStep);
+ };
+ const beginAutoScroll=()=>{
+  const d=session.current;
+  if(!d?.active||scrollFrame.current!==null)return;
+  const viewport=window.visualViewport;
+  const speed=edgeScrollSpeed(d.y,viewport?.height??window.innerHeight,viewport?.offsetTop??0);
+  if(speed!==0)scrollFrame.current=requestAnimationFrame(autoScrollStep);
+ };
  const moveSession=(e:PointerEvent)=>{
   const d=session.current;
   if(!d||e.pointerId!==d.pointerId)return;
-  const distance=Math.hypot(e.clientX-d.fromX,e.clientY-d.fromY);
+  d.x=e.clientX;d.y=e.clientY;
+  const distance=Math.hypot(d.x-d.fromX,d.y-d.fromY);
   if(!d.active){
-   if(e.pointerType==='touch' && !d.holding && distance>9){
+   if(e.pointerType==='touch'&&!d.holding&&distance>9){
     if(d.timer)clearTimeout(d.timer);
     session.current=null;return;
    }
-   if(e.pointerType==='mouse' && distance>5)d.active=true;
+   if(e.pointerType==='mouse'&&distance>5)d.active=true;
   }
   if(!d.active)return;
   e.preventDefault();
-  const hit=tileHit(e.clientX,e.clientY);
+  const hit=tileHit(d.x,d.y);
+  if(hit)d.lastHit=hit;
   let duration=d.tool?.type==='activity'?d.tool.duration:d.block?.duration;
-  if(d.block && hit && (d.mode==='left'||d.mode==='right')){
+  if(d.block&&hit&&(d.mode==='left'||d.mode==='right')){
    duration=d.mode==='left'?d.block.start+d.block.duration-clamp(snap5(hit.point),0,d.block.start+d.block.duration-5)
     :clamp(snap5(hit.point),d.block.start+5,1440)-d.block.start;
   }
-  setVisual({x:e.clientX,y:e.clientY,label:d.tool?.label||d.block?.title||'Sticker',duration,slot:hit?.slot});
+  setVisual({x:d.x,y:d.y,label:d.tool?.label||d.block?.title||'Sticker',duration,slot:hit?.slot});
+  beginAutoScroll();
  };
  useEffect(()=>{
   window.addEventListener('pointermove',moveSession,{passive:false});
   window.addEventListener('pointerup',finishSession);
   window.addEventListener('pointercancel',finishSession);
-  return()=>{window.removeEventListener('pointermove',moveSession);window.removeEventListener('pointerup',finishSession);window.removeEventListener('pointercancel',finishSession);if(session.current?.timer)clearTimeout(session.current.timer)};
+  return()=>{window.removeEventListener('pointermove',moveSession);window.removeEventListener('pointerup',finishSession);window.removeEventListener('pointercancel',finishSession)};
  });
+ useEffect(()=>()=>{if(scrollFrame.current!==null)cancelAnimationFrame(scrollFrame.current);if(session.current?.timer)clearTimeout(session.current.timer)},[]);
  const begin=(e:ReactPointerEvent,mode:DragMode,tool?:Tool,block?:Block)=>{
   if(readOnly)return;
   e.stopPropagation();
   if(e.pointerType==='mouse'&&e.button!==0)return;
   const d:DragSession={mode,pointerId:e.pointerId,tool,block,x:e.clientX,y:e.clientY,fromX:e.clientX,fromY:e.clientY,holding:e.pointerType!=='touch',active:false};
   if(e.pointerType==='touch'){
-   d.timer=setTimeout(()=>{if(session.current===d){d.holding=true;d.active=true;setVisual({x:d.fromX,y:d.fromY,label:d.tool?.label||d.block?.title||'',duration:d.tool?.type==='activity'?d.tool.duration:d.block?.duration})}},350);
+   d.timer=setTimeout(()=>{if(session.current===d){d.holding=true;d.active=true;setVisual({x:d.x,y:d.y,label:d.tool?.label||d.block?.title||'',duration:d.tool?.type==='activity'?d.tool.duration:d.block?.duration});beginAutoScroll()}},350);
   }
   session.current=d;
  };
@@ -226,7 +261,7 @@ export default function StickerPlanner({blocks,logs,readOnly=false,onBlocksChang
    </div>
    {selected&&<div className="sticker-selection" role="status">Selected {selected.emoji} {selected.label}. Now tap a calendar tile to place it. <button type="button" onClick={()=>setSelected(null)}>Cancel</button></div>}
   </div>}
-  <div className="sticker-calendar-heading"><b>4 AM → 4 AM</b><small>Tap ☾ / ✧ to toggle a half-hour · drag an activity's end grips to resize · tap ✔ to log sleep</small></div>
+  <div className="sticker-calendar-heading"><b>4 AM → 4 AM</b><small>Tap ☾ / ✧ to toggle · hold ⠿ to drag; hold near screen edge to scroll · resize from gold ends</small></div>
   <div className="sticker-calendar">
    {Array.from({length:HOUR_COUNT},(_,hour)=>{
     const hourStart=hour*60;
@@ -237,7 +272,7 @@ export default function StickerPlanner({blocks,logs,readOnly=false,onBlocksChang
       const sleep=contents.filter(x=>x.block.category==='sleep').reduce((n,p)=>n+p.duration,0);
       const state=sleep===30?'asleep':sleep===0?'awake':'mixed';
       const rowStamps=stampRow(slot);
-      return <div key={slot} className={`sticker-tile tile-${state}`} data-calendar-tile={slot}>
+      return <div key={slot} className={`sticker-tile tile-${state} ${visual?.slot===slot?'tile-drag-target':''}`} data-calendar-tile={slot}>
        <div className="sticker-tile-top">
         <button type="button" disabled={readOnly} className="sticker-tile-toggle" onClick={()=>selected?toolFromSelection(slot):toggleTile(slot)} aria-label={`${clockAt(slot)} toggle ${state}`}><span>{clockCompact(slot)}</span><b>{state==='asleep'?'☾ Sleep':state==='awake'?'✧ Awake':`◐ ${sleep}m rest`}</b></button>
         {sleep>0&&<button className="sticker-slept" type="button" disabled={readOnly} title="Log / unlog this half hour of actual sleep" onClick={()=>markSleep(slot)}>{contents.some(p=>p.block.category==='sleep'&&p.block.actualSleep!=null)?'✓':'○'}</button>}
@@ -246,9 +281,9 @@ export default function StickerPlanner({blocks,logs,readOnly=false,onBlocksChang
         {contents.map((part,i)=>{
          const b=part.block;
          return <div key={b.id+'-'+i} className={`sticker-piece cat-${b.category}`} style={{left:`${(part.start-slot)/30*100}%`,width:`${part.duration/30*100}%`}} title={`${b.title} · ${b.duration} minutes`}>
-          <span className="sticker-piece-body" onPointerDown={e=>b.category!=='sleep'&&b.category!=='other'?begin(e,'move',undefined,b):undefined} onClick={e=>{e.stopPropagation();if(selected)toolFromSelection(slot)}}>{part.duration>=10?categoryEmoji[b.category]:''}</span>
-          {b.category!=='sleep'&&b.category!=='other'&&!readOnly&&part.start===b.start&&<button className="sticker-grip grip-left" title="Hold and drag to adjust start" aria-label={`Resize beginning of ${b.title}`} onPointerDown={e=>begin(e,'left',undefined,b)} onClick={e=>e.stopPropagation()}/>}
-          {b.category!=='sleep'&&b.category!=='other'&&!readOnly&&part.start+part.duration===b.start+b.duration&&<button className="sticker-grip grip-right" title="Hold and drag to adjust end" aria-label={`Resize end of ${b.title}`} onPointerDown={e=>begin(e,'right',undefined,b)} onClick={e=>e.stopPropagation()}/>}
+          <span className="sticker-piece-body" onPointerDown={e=>b.category!=='other'?begin(e,'move',undefined,b):undefined} onClick={e=>{e.stopPropagation();if(selected)toolFromSelection(slot)}}>{part.duration>=10?categoryEmoji[b.category]:''}</span>
+          {b.category!=='other'&&!readOnly&&part.start===b.start&&<button className="sticker-grip grip-left" title="Hold and drag to adjust start" aria-label={`Resize beginning of ${b.title}`} onPointerDown={e=>begin(e,'left',undefined,b)} onClick={e=>e.stopPropagation()}/>}
+          {b.category!=='other'&&!readOnly&&part.start+part.duration===b.start+b.duration&&<button className="sticker-grip grip-right" title="Hold and drag to adjust end" aria-label={`Resize end of ${b.title}`} onPointerDown={e=>begin(e,'right',undefined,b)} onClick={e=>e.stopPropagation()}/>}
          </div>;
         })}
        </div>
