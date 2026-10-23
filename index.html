@@ -1,1 +1,28 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><meta name="theme-color" content="#101d3d"/><meta name="description" content="A little celestial home for Merlin's puppy schedule, rest, potty, meals, training and daily memories."/><title>Merlin's Daily Handbook</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#101d3d" />
+  <meta name="description" content="A little celestial home for Merlin's puppy schedule, rest, potty, meals, training and daily memories." />
+  <title>Merlin's Daily Handbook</title>
+  <style>
+    #root:empty { min-height: 100vh; }
+    .start-screen { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; box-sizing: border-box; text-align: center; padding: 30px 22px; background: linear-gradient(140deg, #0d1937, #253e78); color: #ffedbe; font-family: Georgia, serif; }
+    .start-screen h1 { font-size: clamp(1.8rem, 5vw, 3rem); margin: 14px 0; }
+    .start-screen p { font: 16px/1.6 system-ui, sans-serif; color: #e0e9ff; max-width: 430px; }
+    .start-screen small { color: #e9d39c; font: 12px/1.5 system-ui, sans-serif; margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <main class="start-screen">
+      <div style="font-size:38px" aria-hidden="true">☾ ✦</div>
+      <h1>Merlin's Daily Handbook</h1>
+      <p>Preparing your little wizard's journal…</p>
+      <small>If this message stays for more than a few seconds, refresh the page. If it persists, the site may still be deploying.</small>
+    </main>
+  </div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>
