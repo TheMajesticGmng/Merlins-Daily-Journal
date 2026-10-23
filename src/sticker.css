@@ -99,3 +99,18 @@
  .sticker-placed-logs button{font-size:.69rem;height:19px;min-width:18px}
  .sticker-calendar-heading small{font-size:.61rem}
 }
+
+/* Daily notes live below the visual calendar rather than behind a separate tab. */
+.merlin-v2 .nav-tabs{max-width:100%;margin-top:10px}
+.merlin-v2 .nav-tabs button{min-width:112px}
+.journal-bottom{margin-top:16px}
+.journal-sticker-summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:58px;background:#111f3e;border:1px solid #4e5c7c;padding:10px;border-radius:12px;margin:12px 0 18px}
+.journal-sticker{display:flex;align-items:center;gap:5px;border-radius:24px;border:1px solid #9c835f;background:#263755;padding:5px 10px;font-size:1.05rem;color:#f3daa5}
+.journal-sticker small{font-size:.69rem;color:#bdcbe3}
+.journal-empty{color:#a8b9da;font-size:.8rem}
+.daily-notes-label{display:block;font:700 1.35rem 'Cormorant Garamond',Georgia,serif;color:#f6dca9;margin:7px 0}
+.daily-notes-label small{font:400 .73rem 'DM Sans',sans-serif;color:#a2b2d6;margin-left:8px}
+.daily-notes{display:block;min-height:112px;width:100%;resize:vertical;border-radius:12px;border:1px solid #6879a1;background:#0c1833;color:#f8e9ca;padding:13px;line-height:1.6;font-size:.88rem}
+.daily-notes::placeholder{color:#8699bb}
+.daily-notes:disabled{opacity:.78}
+@media(max-width:560px){.merlin-v2 .nav-tabs button{min-width:0}.journal-bottom{padding:15px 12px}.daily-notes-label small{display:block;margin-left:0}}
