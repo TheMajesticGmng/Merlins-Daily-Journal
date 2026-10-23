@@ -118,3 +118,36 @@
 /* Long-press touch dragging must not be hijacked by page scrolling while held. */
 .palette-item,.sticker-piece-body{touch-action:none}
 @media (hover:none) and (pointer:coarse){.sticker-grip{width:14px;z-index:4}.sticker-piece-body{min-height:18px}}
+
+/* Mobile sticker trays: the tray swipe and the sticker drag are separate gestures.
+   The main sticker has pan-x for browsing; only the little grip blocks native scrolling. */
+.palette-scroll-controls{display:flex;align-items:stretch;gap:5px;width:100%;min-width:0}
+.palette-scroll-controls .palette-scroll{
+  flex:1 1 auto;width:0;min-width:0;display:flex;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
+  touch-action:pan-x;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;
+  scroll-behavior:smooth;scroll-snap-type:x proximity;scrollbar-width:thin;padding:2px 4px 9px
+}
+.palette-scroll-controls .palette-item{
+ flex:0 0 auto;width:88px;max-width:none;min-width:88px;gap:0;padding:4px 3px 3px;
+ touch-action:pan-x;scroll-snap-align:start;user-select:none;-webkit-user-select:none;
+}
+.palette-scroll-controls .palette-log{width:76px;min-width:76px}
+.palette-select{display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;gap:1px;min-height:54px;border:0;border-radius:9px;background:transparent;color:inherit;padding:3px 2px;touch-action:pan-x;user-select:none;-webkit-user-select:none}
+.palette-select>span{font-size:1.17rem;line-height:1.15}
+.palette-select>b{font-size:.65rem;white-space:nowrap}
+.palette-select>small{font-size:.59rem;color:#b8c4e5}
+.palette-grab{touch-action:none;width:calc(100% - 8px);min-height:28px;display:flex;gap:3px;align-items:center;justify-content:center;
+ margin:3px 4px 1px;padding:2px;border:1px solid #8d805f;border-radius:7px;
+ background:#172b52;color:#f9dfa7;font-weight:700;font-size:17px;line-height:1;user-select:none;-webkit-user-select:none}
+.palette-grab span{font-size:10px;letter-spacing:.01em}
+.palette-grab:active{background:#5c4b39}
+.palette-nav{width:29px;flex:0 0 29px;border:1px solid #62779f;border-radius:10px;background:#203458;color:#f3daa5;
+ font:700 26px/1 'DM Sans',system-ui,sans-serif;padding:0;display:flex;align-items:center;justify-content:center}
+.palette-nav:active{background:#3e517a}
+.palette-scroll-controls .palette-item.armed{border-color:#ffe4a0}
+@media(max-width:560px){
+ .palette-scroll-controls{gap:3px}
+ .palette-nav{width:25px;flex-basis:25px;font-size:23px}
+ .palette-scroll-controls .palette-item{width:82px;min-width:82px;padding:3px}
+ .palette-scroll-controls .palette-log{width:72px;min-width:72px}
+}
