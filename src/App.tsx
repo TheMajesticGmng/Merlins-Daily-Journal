@@ -120,6 +120,7 @@ function HalfHourActivityEditor({slot,blocks,onCancel,onSave}:{slot:number,block
     </div>
   </div>;
 }
+function sleepToggleText(b:Block){return b.actualSleep==null?'Mark slept':'Logged ✓'}
 function BlockEditor({initial,onCancel,onSave,onDelete,others}:{initial:Block|null,onCancel:()=>void,onSave:(b:Block)=>void,onDelete:(id:string)=>void,others:Block[]}){
  const [category,setCategory]=useState<Category>(initial?.category??'enrichment');
  const [start,setStart]=useState(toInputTime(initial?.start??720));
