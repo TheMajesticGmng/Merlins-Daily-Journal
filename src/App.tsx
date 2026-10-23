@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { ArrowLeft, ArrowRight, CalendarDays, Check, CheckCircle2, Download, Edit3, LockKeyhole, LogOut, Moon, Plus, Save, Settings, ShieldCheck, Star, Sun, Trash2, X } from 'lucide-react';
 import { supabase, cloudConfigured } from './supabase';
+import { partsInHalfHour, tileSleepMinutes, wakeHalfHour, sleepHalfHour, replaceInterval } from './halfHour';
 import { actualSleepMinutes, blankDay, buildTemplate, categories, categoryEmoji, categoryNames, dateLocal, DayRecord, type Block, type Category, type JournalEvent, type LogKind, type PottyResult, inputToOffset, loggedSleepCount, makeId, prettyDate, shiftDate, sleepMinutes, timeFromMinutes, toClock, toInputTime } from './model';
 
 type Mode = 'local'|'cloud';
@@ -32,14 +33,93 @@ function AuthGate({onLocal}:{onLocal:()=>void}){
 }
 function Progress({value,max,label}:{value:number,max:number,label:string}){return <div className="progress-wrap" role="progressbar" aria-label={label} aria-valuenow={value} aria-valuemin={0} aria-valuemax={max}><div style={{width:`${Math.min(100,Math.max(0,(value/max)*100))}%`}} /></div>}
 function SleepSummary({record}:{record:DayRecord}){
-  const planned=sleepMinutes(record.blocks), actual=actualSleepMinutes(record.blocks), total=record.blocks.filter(b=>b.category==='sleep').length,logged=loggedSleepCount(record.blocks);
-  return <div className="summary-grid"><article className="summary-card"><div className="mini-title"><Moon size={17}/> Planned rest</div><strong>{timeFromMinutes(planned)}</strong><Progress label="Planned sleep toward 18 hours" value={planned} max={1080}/><small>Flexible reference: 18 hours · includes 2 AM and 6:30 AM potty breaks</small></article><article className="summary-card"><div className="mini-title"><CheckCircle2 size={17}/> Logged actual sleep</div><strong>{timeFromMinutes(actual)}</strong><Progress label="Actual sleep logged" value={actual} max={1080}/><small>{logged} of {total} sleep blocks recorded · unrecorded blocks count as unknown</small></article><article className="summary-card compact"><div className="mini-title"><Sun size={17}/> Planned awake</div><strong>{timeFromMinutes(1440-planned)}</strong><small>Includes all meals, play, potty trips, training and wind-downs</small></article></div>;
+  const target=1080, planned=sleepMinutes(record.blocks), actual=actualSleepMinutes(record.blocks);
+  const total=record.blocks.filter(b=>b.category==='sleep').length, logged=loggedSleepCount(record.blocks);
+  return <div className="summary-grid">
+    <article className="summary-card sleep-goal-card">
+      <div className="mini-title"><Moon size={18}/> Merlin's sleep counter</div>
+      <div className="sleep-counter"><div><span className="counter-caption">TARGET</span><strong>18h</strong></div><div className="counter-arrow">✦</div><div className="counter-projected"><span className="counter-caption">PROJECTED FROM TILES</span><strong>{timeFromMinutes(planned)}</strong></div></div>
+      <Progress label="Scheduled sleep toward 18 hours" value={planned} max={target}/>
+      <small>Updates automatically as you toggle half-hour sleep tiles. Planned rest is not actual sleep.</small>
+    </article>
+    <article className="summary-card">
+      <div className="mini-title"><CheckCircle2 size={17}/> Actual sleep logged</div>
+      <strong>{timeFromMinutes(actual)}</strong><Progress label="Actual sleep logged" value={actual} max={target}/>
+      <small>{logged} of {total} sleep blocks recorded · unchecked naps are unknown</small>
+    </article>
+    <article className="summary-card compact">
+      <div className="mini-title"><Sun size={17}/> Projected awake time</div>
+      <strong>{timeFromMinutes(1440-planned)}</strong>
+      <small>Meals, potty trips, play, training and quiet activities</small>
+    </article>
+  </div>;
 }
-function Timeline({blocks,onSelect}:{blocks:Block[],onSelect:(b:Block)=>void}){
- const display=[...blocks].sort((a,b)=>a.start-b.start);
- return <div className="timeline-frame"><div className="clock-ticks"><span>7 AM</span><span>1 PM</span><span>7 PM</span><span>1 AM</span><span>7 AM</span></div><div className="day-strip" role="group" aria-label="Click a colored time block to edit it">{display.map(b=><button key={b.id} className={`strip-slice type-${b.category} ${b.completed?'done':''}`} style={{left:`${b.start/14.4}%`,width:`${b.duration/14.4}%`}} onClick={()=>onSelect(b)} title={`${toClock(b.start)}–${toClock(b.start+b.duration)}: ${b.title}${b.actualSleep!=null?`; slept ${b.actualSleep} minutes`:''}`} aria-label={`Edit ${b.title} at ${toClock(b.start)}`}/>)}</div><div className="legend">{(['sleep','potty','meal','play','training','walk','settle'] as Category[]).map(c=><span key={c}><b className={`legend-dot type-${c}`}/>{categoryNames[c]}</span>)}</div></div>
+
+function HalfHourPlanner({blocks,onToggle,onPlan,onEdit}:{blocks:Block[],onToggle:(start:number)=>void,onPlan:(start:number)=>void,onEdit:(b:Block)=>void}){
+  const tile=(slot:number)=>{
+    const pieces=partsInHalfHour(blocks,slot), sleeping=tileSleepMinutes(blocks,slot);
+    const state=sleeping===30?'sleep':sleeping===0?'awake':'mixed';
+    return <div className={`half-tile half-${state}`} key={slot}>
+      <button type="button" className="half-toggle" onClick={()=>onToggle(slot)} aria-label={`${toClock(slot)}: ${state}. Toggle sleep or awake`} title="Tap to toggle sleep / awake. Mixed slots retain their potty breaks.">
+        <span className="half-time">{toClock(slot).replace(' AM','a').replace(' PM','p')}</span>
+        <span className="half-state">{sleeping===30?'☾ Sleep':sleeping===0?'✧ Awake':`◐ ${sleeping}m sleep`}</span>
+      </button>
+      <div className="tile-track" role="group" aria-label={`Activities ${toClock(slot)}–${toClock(slot+30)}`}>
+        {pieces.map((part,i)=><button type="button" key={part.block.id+':'+i} className={`tile-segment type-${part.block.category}`} style={{left:`${((part.start-slot)/30)*100}%`,width:`${(part.minutes/30)*100}%`}} title={`${part.block.title}: ${part.minutes} minutes. Tap to edit.`} onClick={()=>onEdit(part.block)} aria-label={`Edit ${part.block.title} (${part.minutes} minutes)`}>
+          <span>{part.minutes>=10?categoryEmoji[part.block.category]:''}</span>
+        </button>)}
+      </div>
+      {sleeping<30 && <button type="button" className="half-plan" onClick={()=>onPlan(slot)} aria-label={`Plan activity in ${toClock(slot)} tile`}>＋ Plan activity</button>}
+    </div>;
+  };
+  return <div className="hour-board">
+    {Array.from({length:24},(_,i)=><div className="hour-row" key={i}>
+      <div className="hour-label"><span>{toClock(i*60).replace(':00','')}</span><small>{i>=15?'NEXT MORNING':i===0?'DAY START':''}</small></div>
+      {tile(i*60)}{tile(i*60+30)}
+    </div>)}
+  </div>;
 }
-function sleepToggleText(b:Block){return b.actualSleep==null ? 'Mark slept' : 'Logged ✓'}
+function HalfHourActivityEditor({slot,blocks,onCancel,onSave}:{slot:number,blocks:Block[],onCancel:()=>void,onSave:(start:number,duration:number,category:Category,title:string,details:string)=>void}){
+  const existing=partsInHalfHour(blocks,slot);
+  const awake=existing.find(p=>p.block.category!=='sleep');
+  const [offset,setOffset]=useState(awake?Math.ceil((awake.start-slot)/5)*5:0);
+  const [duration,setDuration]=useState(10);
+  const [category,setCategory]=useState<Category>('potty');
+  const [title,setTitle]=useState('Potty break');
+  const [details,setDetails]=useState('');
+  const [error,setError]=useState('');
+  const chosenStart=slot+offset;
+  const save=(e:FormEvent)=>{
+    e.preventDefault();setError('');
+    if(offset+duration>30){setError('Keep activities within their half-hour tile.');return;}
+    const intersections=existing.filter(p=>p.start<chosenStart+duration && p.start+p.minutes>chosenStart);
+    if(intersections.some(p=>p.block.category==='sleep')){setError('This portion is scheduled for sleep. Toggle the tile awake before planning here.');return;}
+    const replaced=intersections.filter(p=>p.block.category!=='other');
+    if(replaced.length && !confirm(`Replace ${[...new Set(replaced.map(p=>p.block.title))].join(', ')} during these ${duration} minutes?`))return;
+    onSave(chosenStart,duration,category,title,details);
+  };
+  return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onCancel()}}>
+    <div className="modal tile-modal" role="dialog" aria-modal="true" aria-labelledby="tile-editor-heading">
+      <header className="modal-header"><h2 id="tile-editor-heading">Plan ${toClock(slot)}–${toClock(slot+30)}</h2><button type="button" className="icon-button" onClick={onCancel} aria-label="Close"><X size={20}/></button></header>
+      <p className="tile-modal-help">Assign a 5–30 minute activity inside this tile. A 10-minute activity fills exactly one-third of the bar. Existing activities are preserved unless you confirm replacing them.</p>
+      <form className="form-grid" onSubmit={save}>
+        <label>Activity<select value={category} onChange={e=>{const c=e.target.value as Category;setCategory(c);setTitle(categoryNames[c]);}}>
+          {categories.filter(c=>c!=='sleep').map(c=><option key={c} value={c}>{categoryEmoji[c]} {categoryNames[c]}</option>)}
+        </select></label>
+        <label>Start within tile<select value={offset} onChange={e=>setOffset(Number(e.target.value))}>
+          {Array.from({length:6},(_,i)=>i*5).map(n=><option key={n} value={n}>{toClock(slot+n)}</option>)}
+        </select></label>
+        <label>Duration<select value={duration} onChange={e=>setDuration(Number(e.target.value))}>
+          {Array.from({length:6},(_,i)=>(i+1)*5).filter(n=>n<=30-offset).map(n=><option key={n} value={n}>{n} minutes</option>)}
+        </select></label>
+        <label>Label<input required maxLength={90} value={title} onChange={e=>setTitle(e.target.value)}/></label>
+        <label className="wide">Notes<textarea value={details} maxLength={500} rows={2} onChange={e=>setDetails(e.target.value)} placeholder="Quiet potty, place practice, sniff walk, crate work…"/></label>
+        {error&&<p className="error wide" role="alert">{error}</p>}
+        <div className="form-actions wide"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button type="submit" className="primary">Add to this tile</button></div>
+      </form>
+    </div>
+  </div>;
+}
 function BlockEditor({initial,onCancel,onSave,onDelete,others}:{initial:Block|null,onCancel:()=>void,onSave:(b:Block)=>void,onDelete:(id:string)=>void,others:Block[]}){
  const [category,setCategory]=useState<Category>(initial?.category??'enrichment');
  const [start,setStart]=useState(toInputTime(initial?.start??720));
@@ -59,7 +139,7 @@ function Comparison({record,onChoose}:{record:DayRecord,onChoose:(kind:'original
 function QuickLogs({logs,onAdd,onEdit,onDelete}:{logs:JournalEvent[],onAdd:(k:LogKind)=>void,onEdit:(l:JournalEvent)=>void,onDelete:(id:string)=>void}){const sorted=[...logs].sort((a,b)=>inputToOffset(a.time)-inputToOffset(b.time));return <><div className="quick-buttons"><button onClick={()=>onAdd('potty')}><span>🐾</span> Potty</button><button onClick={()=>onAdd('meal')}><span>🥣</span> Meal</button><button onClick={()=>onAdd('accident')}><span>🧻</span> Accident</button><button onClick={()=>onAdd('behavior')}><span>🌦️</span> Behavior</button><button onClick={()=>onAdd('training')}><span>✨</span> Training</button><button onClick={()=>onAdd('other')}><Plus size={17}/> Other</button></div>{sorted.length===0?<div className="empty-state">No events logged yet. Quick-log potty trips, meals, accidents, training or changes in energy here.</div>:<div className="event-list">{sorted.map(l=><article key={l.id} className="event"><div className="event-clock">{l.time}{inputToOffset(l.time)>1020&&<small>next AM</small>}</div><div className="event-body"><b>{typeOfLog[l.kind]}</b>{l.kind==='potty'||l.kind==='accident'?<span> · {({pee:'Pee',poop:'Poop',both:'Both',neither:'Neither'} as Record<PottyResult,string>)[l.result||'neither']} · {l.place||'outside'}</span>:null}{l.kind==='meal'&&<span> · {l.meal||'Meal'} {l.amount?`· ${l.amount}`:''}</span>}{l.kind==='behavior'&&l.mood&&<span> · {l.mood}</span>}{l.note&&<p>{l.note}</p>}</div><button className="icon-button" onClick={()=>onEdit(l)} title="Edit log" aria-label="Edit log"><Edit3 size={16}/></button><button className="icon-button" onClick={()=>{if(confirm('Delete this log entry?'))onDelete(l.id)}} title="Delete log" aria-label="Delete log"><Trash2 size={16}/></button></article>)}</div>}</>}
 function ExportButton({mode,userId}:{mode:Mode,userId?:string}){const [busy,setBusy]=useState(false),[error,setError]=useState('');const download=async()=>{setBusy(true);setError('');try{let days: unknown[]; if(mode==='local'){days=Object.keys(localStorage).filter(k=>k.startsWith(PERSIST_PREFIX+'day:')).map(k=>({day_date:k.split(':').pop(),record:JSON.parse(localStorage.getItem(k)||'null')}));}else if(supabase && userId){const {data,error}=await supabase.from('day_records').select('day_date,record').eq('user_id',userId).order('day_date');if(error)throw error;days=data||[];}else throw Error('Not signed in');const text=JSON.stringify({format:'merlins-handbook-backup-v1',exported_at:new Date().toISOString(),days},null,2);const url=URL.createObjectURL(new Blob([text],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download=`merlin-journal-backup-${dateLocal()}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),2000);}catch(e){setError(errorText(e))}finally{setBusy(false)}};return <div><button className="secondary" onClick={download} disabled={busy}><Download size={17}/>{busy?'Preparing…':'Export all logged days (JSON)'}</button>{error&&<p className="error">{error}</p>}<p className="fine-print">Your export is an ordinary, unencrypted JSON file. Keep it somewhere private.</p></div>}
 function App(){
- const [mode,setMode]=useState<Mode>(cloudConfigured?'cloud':'local');const [user,setUser]=useState<User|null>(null);const [authReady,setAuthReady]=useState(!cloudConfigured);const [page,setPage]=useState<Page>('planner');const [date,setDate]=useState(dateLocal());const [record,setRecord]=useState<DayRecord>(()=>getLocalDay(dateLocal()));const [loading,setLoading]=useState(false);const [status,setStatus]=useState('');const [error,setError]=useState('');const [editingBlock,setEditingBlock]=useState<Block|null|undefined>(undefined);const [editingLog,setEditingLog]=useState<JournalEvent|null|undefined>(undefined);const [profile,setProfile]=useState<Profile>(defaultProfile);const [historical,setHistorical]=useState<{date:string;sleep:number;logs:number;mood:string}[]>([]);const [dailyNote,setDailyNote]=useState('');
+ const [mode,setMode]=useState<Mode>(cloudConfigured?'cloud':'local');const [user,setUser]=useState<User|null>(null);const [authReady,setAuthReady]=useState(!cloudConfigured);const [page,setPage]=useState<Page>('planner');const [date,setDate]=useState(dateLocal());const [record,setRecord]=useState<DayRecord>(()=>getLocalDay(dateLocal()));const [loading,setLoading]=useState(false);const [status,setStatus]=useState('');const [error,setError]=useState('');const [editingBlock,setEditingBlock]=useState<Block|null|undefined>(undefined);const [editingLog,setEditingLog]=useState<JournalEvent|null|undefined>(undefined);const [planningTile,setPlanningTile]=useState<number|null>(null);const [profile,setProfile]=useState<Profile>(defaultProfile);const [historical,setHistorical]=useState<{date:string;sleep:number;logs:number;mood:string}[]>([]);const [dailyNote,setDailyNote]=useState('');
  const currentIdentity=useRef('');const lastLoad=useRef(0);const saveQueue=useRef<Promise<unknown>>(Promise.resolve());
  useEffect(()=>{if(!supabase)return; supabase.auth.getSession().then(({data})=>{setUser(data.session?.user??null);setAuthReady(true)}).catch(()=>setAuthReady(true));const sub=supabase.auth.onAuthStateChange((_event,session)=>setUser(session?.user??null));return()=>sub.data.subscription.unsubscribe()},[]);
  useEffect(()=>{currentIdentity.current=(mode==='cloud'?(user?.id||'signed-out'):'local');},[mode,user?.id]);
@@ -76,6 +156,22 @@ function App(){
  const saveLog=(log:JournalEvent)=>{saveRecord({...record,logs:[...record.logs.filter(x=>x.id!==log.id),log]});setEditingLog(undefined)};
  const chooseTemplate=(kind:'original'|'restful')=>{if(!confirm(`Use the ${kind==='original'?'Post-it':'18-hour'} template for this date? Existing planned blocks and sleep markings will be replaced, but logs and notes will remain.`))return;saveRecord({...record,template:kind,blocks:buildTemplate(kind)})};
  const saveProfile=async()=>{setStatus('Saving profile…');try{if(mode==='local'){localStorage.setItem(PERSIST_PREFIX+'profile',JSON.stringify(profile))}else if(user&&supabase){const {error}=await supabase.from('profiles').upsert({user_id:user.id,display_name:profile.display_name,pet_name:profile.pet_name,pet_weight_lbs:profile.pet_weight_lbs?Number(profile.pet_weight_lbs):null,updated_at:new Date().toISOString()},{onConflict:'user_id'});if(error)throw error;}setStatus('Profile saved')}catch(e){setError(errorText(e))}};
+  const toggleTile=(slot:number)=>{
+   const asleep=tileSleepMinutes(record.blocks,slot);
+   if(asleep>0){
+     const others=partsInHalfHour(record.blocks,slot).filter(p=>p.block.category!=='sleep');
+     if(others.length && !confirm('This tile also contains a potty or activity break. Only its sleep portion will change to awake; existing activities remain. Continue?'))return;
+     saveRecord({...record,template:'custom',blocks:wakeHalfHour(record.blocks,slot)});
+   } else {
+     const planned=partsInHalfHour(record.blocks,slot).filter(p=>p.block.category!=='other');
+     if(planned.length && !confirm(`Switch ${toClock(slot)}–${toClock(slot+30)} to sleep? This replaces ${[...new Set(planned.map(p=>p.block.title))].join(', ')} within that half-hour.`))return;
+     saveRecord({...record,template:'custom',blocks:sleepHalfHour(record.blocks,slot)});
+   }
+ };
+ const addTileActivity=(start:number,duration:number,category:Category,title:string,details:string)=>{
+   saveRecord({...record,template:'custom',blocks:replaceInterval(record.blocks,start,duration,category,title,details)});
+   setPlanningTile(null);
+ };
  const loggedPotty = record.logs.filter(x=>x.kind==='potty').length;const loggedMeals=record.logs.filter(x=>x.kind==='meal').length;
  const nav=[['planner','Schedule',CalendarDays],['journal','Daily journal',Edit3],['history','History',Moon],['settings','Settings',Settings]] as const;
  if(!authReady)return <div className="boot"><Moon/> Loading the observatory…</div>;
@@ -84,11 +180,12 @@ function App(){
  {page!=='settings'&&<div className="datebar"><button className="round-button" onClick={()=>setDate(d=>shiftDate(d,-1))} title="Previous day"><ArrowLeft size={19}/></button><div><span className="eyebrow">MERLIN'S ADVENTURE LOG</span><h2>{prettyDate(date)}</h2></div><button className="round-button" onClick={()=>setDate(d=>shiftDate(d,1))} title="Next day"><ArrowRight size={19}/></button><label className="picker"><CalendarDays size={17}/><input type="date" value={date} onChange={e=>e.target.value&&setDate(e.target.value)} aria-label="Choose date"/></label><button className="today" onClick={()=>setDate(dateLocal())}>Today</button></div>}
  {error&&<div className="error-alert" role="alert"><span>{error}</span><button onClick={()=>setError('')} aria-label="Dismiss error"><X size={16}/></button></div>}
  {loading?<div className="loading">Turning the pages…</div>:<>
- {page==='planner'&&<><div className="welcome"><div><h2><Star size={20}/> Day at a glance</h2><p>Adjust activities, record real sleep, and follow a schedule that fits your puppy—not the other way around.</p></div><span className="status"><Check size={14}/>{status||'Ready to log'}</span></div><SleepSummary record={record}/><section className="panel"><div className="section-heading"><div><h2>24-hour activity map</h2><p>7 AM through 7 AM the next morning · tap a colored segment or activity to edit</p></div><span className="pill moon-pill">☾ 18h reference</span></div><Timeline blocks={record.blocks} onSelect={b=>setEditingBlock(b)}/><div className="section-heading subtitled"><div><h2>Your daily blocks</h2><p>Check off completed activities. For sleep, log actual minutes slept.</p></div><button className="secondary" onClick={()=>setEditingBlock(null)}><Plus size={17}/> Add activity</button></div><div className="blocks">{record.blocks.map(b=><div className={`block-row type-border-${b.category}`} key={b.id}><span className="block-time">{toClock(b.start)}<small>{formatDuration(b.duration)}</small></span><span className="block-emoji">{categoryEmoji[b.category]}</span><div className="block-description"><b>{b.title}</b>{b.details&&<small>{b.details}</small>}</div>{b.category==='sleep'?<div className="sleep-controls"><button className={`tiny-check ${b.actualSleep!=null?'checked':''}`} onClick={()=>updateBlock(b.id,{actualSleep:b.actualSleep!=null?null:b.duration})}>{sleepToggleText(b)}</button>{b.actualSleep!=null&&<label className="actual-input"><input type="number" min="0" max="720" step="5" value={b.actualSleep} aria-label="Actual sleep minutes" onChange={e=>updateBlock(b.id,{actualSleep:Math.max(0,Math.min(720,Number(e.target.value)))})}/> min</label>}</div>:<button className={`tiny-check ${b.completed?'checked':''}`} onClick={()=>updateBlock(b.id,{completed:!b.completed})}>{b.completed?'Done ✓':'Mark done'}</button>}<button className="icon-button edit-block" onClick={()=>setEditingBlock(b)} title={`Edit ${b.title}`} aria-label={`Edit ${b.title}`}><Edit3 size={16}/></button></div>)}</div><p className="fine-print">Checking a nap logs the planned duration as actual sleep. Adjust the number if Merlin slept less or longer. Unchecked naps are not counted as actual sleep.</p></section><Comparison record={record} onChoose={chooseTemplate}/></>}
+ {page==='planner'&&<><div className="welcome"><div><h2><Star size={20}/> Day at a glance</h2><p>Adjust activities, record real sleep, and follow a schedule that fits your puppy—not the other way around.</p></div><span className="status"><Check size={14}/>{status||'Ready to log'}</span></div><SleepSummary record={record}/><section className="panel"><div className="section-heading"><div><h2>Merlin’s half-hour day ✦</h2><p>7 AM through 7 AM · tap the top of any tile to toggle sleep or awake; use “Plan activity” for 5–30 minute blocks. Colored portions are proportional to time.</p></div><span className="pill moon-pill">☾ 48 half-hour tiles</span></div><HalfHourPlanner blocks={record.blocks} onToggle={toggleTile} onPlan={setPlanningTile} onEdit={b=>setEditingBlock(b)}/><div className="section-heading subtitled"><div><h2>Your daily blocks</h2><p>Check off completed activities. For sleep, log actual minutes slept.</p></div><button className="secondary" onClick={()=>setEditingBlock(null)}><Plus size={17}/> Add activity</button></div><div className="blocks">{record.blocks.map(b=><div className={`block-row type-border-${b.category}`} key={b.id}><span className="block-time">{toClock(b.start)}<small>{formatDuration(b.duration)}</small></span><span className="block-emoji">{categoryEmoji[b.category]}</span><div className="block-description"><b>{b.title}</b>{b.details&&<small>{b.details}</small>}</div>{b.category==='sleep'?<div className="sleep-controls"><button className={`tiny-check ${b.actualSleep!=null?'checked':''}`} onClick={()=>updateBlock(b.id,{actualSleep:b.actualSleep!=null?null:b.duration})}>{sleepToggleText(b)}</button>{b.actualSleep!=null&&<label className="actual-input"><input type="number" min="0" max="720" step="5" value={b.actualSleep} aria-label="Actual sleep minutes" onChange={e=>updateBlock(b.id,{actualSleep:Math.max(0,Math.min(720,Number(e.target.value)))})}/> min</label>}</div>:<button className={`tiny-check ${b.completed?'checked':''}`} onClick={()=>updateBlock(b.id,{completed:!b.completed})}>{b.completed?'Done ✓':'Mark done'}</button>}<button className="icon-button edit-block" onClick={()=>setEditingBlock(b)} title={`Edit ${b.title}`} aria-label={`Edit ${b.title}`}><Edit3 size={16}/></button></div>)}</div><p className="fine-print">Checking a nap logs the planned duration as actual sleep. Adjust the number if Merlin slept less or longer. Unchecked naps are not counted as actual sleep.</p></section><Comparison record={record} onChoose={chooseTemplate}/></>}
  {page==='journal'&&<><section className="panel"><div className="section-heading"><div><h2>Little moments, big milestones</h2><p>Quickly log potty results, meals, accidents, crate practice, grooming and behavior. Times before 7 AM belong to the following morning.</p></div><span className="pill">{loggedPotty} potty · {loggedMeals} meals</span></div><QuickLogs logs={record.logs} onAdd={kind=>setEditingLog({id:'',kind,time:todayClock()} as JournalEvent)} onEdit={l=>setEditingLog(l)} onDelete={id=>saveRecord({...record,logs:record.logs.filter(l=>l.id!==id)})}/></section><section className="panel notes-panel"><div className="section-heading"><div><h2>Today's observations</h2><p>What helped Merlin settle? How much did he actually sleep? Anything worth remembering?</p></div></div><div className="mood-options"><span>How was his energy?</span>{(['calm','mixed','frantic'] as const).map(m=><button key={m} className={record.mood===m?'selected':''} onClick={()=>saveRecord({...record,mood:record.mood===m?'':m})}>{({calm:'🌙 Calm',mixed:'🌤 Mixed',frantic:'⚡ Frantic'} as const)[m]}</button>)}</div><textarea rows={7} value={dailyNote} onChange={e=>setDailyNote(e.target.value)} onBlur={()=>{if(record.notes!==dailyNote)saveRecord({...record,notes:dailyNote})}} placeholder="Example: Merlin settled when we stayed beside his crate. Became frantic after missing his afternoon nap. Calm after sniffing games…" maxLength={20000}/><div className="note-foot"><small>Notes save when you leave this field. Use the Save notes button before changing days.</small><button className="secondary" onClick={()=>saveRecord({...record,notes:dailyNote})}><Save size={16}/> Save notes</button></div></section></>}
  {page==='history'&&<section className="panel"><div className="section-heading"><div><h2>Previous days</h2><p>Last 14 days with saved entries. Actual sleep counts only naps you've marked.</p></div><button className="ghost" onClick={()=>void loadHistory()}>Refresh</button></div>{historical.length===0?<div className="empty-state">Saved days will appear here as you use the schedule and journal.</div>:<div className="history-list">{historical.map(h=><button key={h.date} onClick={()=>{setDate(h.date);setPage('journal')}}><div><b>{prettyDate(h.date)}</b><small>{h.logs} logged event{h.logs===1?'':'s'} · {h.mood||'no mood marked'}</small></div><div className="history-right"><span>{timeFromMinutes(h.sleep)} logged sleep</span><ArrowRight size={17}/></div></button>)}</div>}<div className="history-help">Compare sleep and behavior over several days to see whether Merlin becomes calmer after more consistent naps.</div></section>}
  {page==='settings'&&<><section className="panel"><div className="section-heading"><div><h2>Profile & pet details</h2><p>Personalize your handbook.</p></div></div><form className="form-grid" onSubmit={e=>{e.preventDefault();void saveProfile()}}><label>Your display name<input maxLength={80} value={profile.display_name} onChange={e=>setProfile({...profile,display_name:e.target.value})} placeholder="Optional"/></label><label>Puppy's name<input maxLength={80} required value={profile.pet_name} onChange={e=>setProfile({...profile,pet_name:e.target.value})}/></label><label>Weight (lbs)<input min="0.1" max="400" step="0.1" type="number" value={profile.pet_weight_lbs} onChange={e=>setProfile({...profile,pet_weight_lbs:e.target.value})}/></label><div className="form-actions wide"><button className="primary" type="submit"><Save size={16}/> Save profile</button></div></form></section><section className="panel"><h2>Data & security</h2><div className="security-info"><ShieldCheck size={21}/><div>{mode==='cloud'?<><b>Cloud sync is enabled.</b><p>Supabase Auth handles login. Database row-level security restricts each record to its owner. HTTPS protects traffic in transit, and the provider encrypts stored data at rest. Not end-to-end encrypted.</p></>:<><b>Local preview mode.</b><p>Records stay in this browser's localStorage without a login or dedicated encryption. Clearing browser data will delete the preview. Set up Supabase to get private account-backed sync.</p></>}</div></div><ExportButton mode={mode} userId={user?.id}/></section><section className="panel"><h2>About this routine</h2><p>This app is a logging and planning tool, not a veterinary diagnosis or a requirement to make Merlin sleep exactly 18 hours. Adapt activities to his real needs. Potty breaks after sleep, meals and play may be necessary even if they differ from the chart.</p><p className="fine-print">Account access is currently individual. A separate login won't automatically share a household journal. Secure household sharing can be added in a future version.</p></section></>}
  </> }</> }</div>
+ {planningTile!==null&&<HalfHourActivityEditor key={planningTile} slot={planningTile} blocks={record.blocks} onCancel={()=>setPlanningTile(null)} onSave={addTileActivity}/>}
  {(editingBlock!==undefined)&&<BlockEditor key={editingBlock?.id??'new-block'} initial={editingBlock} others={record.blocks.filter(b=>b.id!==editingBlock?.id)} onCancel={()=>setEditingBlock(undefined)} onSave={addOrEditBlock} onDelete={removeBlock}/>}
  {(editingLog!==undefined)&&<LogEditor key={editingLog?.id||'new-log'} initial={editingLog} onCancel={()=>setEditingLog(undefined)} onSave={saveLog}/>}
  <footer className="footer">✦ From one small wizard's day to the next ✦ <span>Made for Merlin, with patience and a little stardust.</span></footer></div>
